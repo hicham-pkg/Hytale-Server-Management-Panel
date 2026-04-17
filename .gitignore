@@ -49,5 +49,6 @@ test-results/
 *.code-workspace
 *.pyc
 __pycache__
+*.tsbuildinfo
 .claude/
 uploads/
