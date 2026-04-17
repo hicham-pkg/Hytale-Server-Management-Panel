@@ -1,4 +1,5 @@
-import { sanitizeCommand, stripAnsi } from '../utils/sanitize';
+import { stripAnsi } from '@hytale-panel/shared';
+import { sanitizeCommand } from '../utils/sanitize';
 import type { HelperConfig } from '../config';
 import { tmuxExec } from '../utils/tmux';
 

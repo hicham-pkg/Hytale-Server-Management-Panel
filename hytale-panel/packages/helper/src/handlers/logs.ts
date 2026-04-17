@@ -1,5 +1,5 @@
 import { runAllowlistedCommand } from '../utils/command';
-import { stripAnsi } from '../utils/sanitize';
+import { stripAnsi } from '@hytale-panel/shared';
 import type { HelperConfig } from '../config';
 
 export interface LogReadResult {

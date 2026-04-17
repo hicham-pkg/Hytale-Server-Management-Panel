@@ -70,7 +70,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and hardening guide.
 ### 1. Clone and Install
 
 ```bash
-git clone https://github.com/your-repo/hytale-panel.git
+git clone <your-fork-url>  # replace with the URL of your repository
 cd hytale-panel
 sudo ./install.sh
 ```

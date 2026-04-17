@@ -10,3 +10,4 @@ export * from './types/models';
 export * from './types/helper';
 export * from './types/ws';
 export * from './types/api';
+export * from './utils/sanitize';
