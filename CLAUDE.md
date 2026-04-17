@@ -4,12 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Layout
 
-Two separate app trees live at the root:
-
 - **`hytale-panel/`** — The production monorepo (pnpm workspaces). Contains the Fastify API, Next.js web frontend, privileged helper service, shared types, seed scripts, Docker Compose, systemd units, and deployment tooling. This is the codebase the VPS install script targets.
-- **`app/frontend/`** — An alternative Vite + React + shadcn/ui frontend that connects to the same API surface. Standalone npm/pnpm project; no backend. Not wired into the production install path.
-
-Both frontends implement the same feature set (dashboard, console, whitelist, bans, backups, crashes, audit, settings). When changing API contracts, check both.
 
 ## hytale-panel — Commands
 
@@ -37,20 +32,6 @@ pnpm run generate-secret                          # mint helper HMAC secret
 ```
 
 Tests **do not** live inside each package — they live at `hytale-panel/tests/{api,e2e,helper,web}/`. The root `vitest.config.ts` aliases `@hytale-panel/shared` to the TS source so tests run without a prior build.
-
-## app/frontend — Commands
-
-```bash
-cd app/frontend
-pnpm install         # (or npm install — lockfile is pnpm's)
-pnpm run dev         # Vite on :3000, proxies /api → http://localhost:8000
-pnpm run build
-pnpm run lint
-```
-
-**Gotcha:** `vite.config.ts` proxies `/api` to `http://localhost:8000`, but the production API runs on `:4000` (see `docker-compose.yml` / `API_PORT`). If pointing this frontend at a running hytale-panel API, either change the proxy target or override the API port.
-
-Shared tab components (WhitelistTab, BansTab, etc.) live in `src/pages/Management.tsx` and are re-exported to the per-route page files. Edit Management.tsx to change a tab; the per-route wrappers just add a page header.
 
 ## Ops / Deployment (hytale-panel)
 
