@@ -1,0 +1,62 @@
+# ============================================================
+# Hytale Game Server — tmux Wrapper Service
+# ============================================================
+# This replaces a plain hytale.service to enable stdin/stdout
+# interaction via tmux. The panel uses tmux send-keys to send
+# commands and tmux capture-pane to read console output.
+#
+# Install:
+#   sudo cp hytale-tmux.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable hytale-tmux.service
+#
+# If migrating from hytale.service:
+#   sudo systemctl disable hytale.service
+#   sudo systemctl stop hytale.service
+#   sudo systemctl enable hytale-tmux.service
+#   sudo systemctl start hytale-tmux.service
+#
+# Manual interaction:
+#   sudo -u hytale tmux -S /opt/hytale/run/hytale.tmux.sock attach -t hytale
+#   (Detach with Ctrl+B, D)
+# ============================================================
+
+[Unit]
+Description=Hytale Game Server (tmux)
+After=network.target
+Documentation=https://github.com/your-repo/hytale-panel
+
+[Service]
+Type=forking
+User=hytale
+Group=hytale
+WorkingDirectory=/opt/hytale
+UMask=007
+# Hytale extracts native libraries during startup. Keep temp files inside the
+# writable server root so startup still works under ProtectSystem=strict.
+Environment=TMPDIR=/opt/hytale/tmp
+Environment=JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/opt/hytale/tmp
+
+# Start the server inside a named tmux session using a shared socket path so
+# systemd, the helper, and manual tmux commands all target the same runtime.
+ExecStartPre=/usr/bin/install -d -m 0770 /opt/hytale/run
+ExecStartPre=/usr/bin/install -d -m 0770 /opt/hytale/tmp
+ExecStart=/usr/bin/tmux -S /opt/hytale/run/hytale.tmux.sock new-session -d -s hytale '/opt/hytale/start.sh'
+ExecStartPost=/bin/sh -c 'test -S /opt/hytale/run/hytale.tmux.sock && chmod 660 /opt/hytale/run/hytale.tmux.sock'
+
+# Graceful stop: send save command, wait for world save, then kill session
+ExecStop=/bin/bash -lc '/usr/bin/tmux -S /opt/hytale/run/hytale.tmux.sock has-session -t hytale 2>/dev/null || exit 0; /usr/bin/tmux -S /opt/hytale/run/hytale.tmux.sock send-keys -t hytale "save" Enter; sleep 5; /usr/bin/tmux -S /opt/hytale/run/hytale.tmux.sock kill-session -t hytale'
+
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/hytale
+# Keep tmux in the normal host namespace so the shared explicit socket path is
+# the same one seen by systemd, the helper, and manual operator commands.
+
+[Install]
+WantedBy=multi-user.target

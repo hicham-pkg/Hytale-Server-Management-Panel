@@ -1,0 +1,6 @@
+packages:
+  - 'packages/shared'
+  - 'packages/helper'
+  - 'packages/api'
+  - 'packages/web'
+  - 'packages/scripts'

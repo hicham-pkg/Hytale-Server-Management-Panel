@@ -1,0 +1,139 @@
+# ============================================================
+# Hytale Server Management Panel — Docker Compose
+# ============================================================
+# This runs the PANEL services (API + Web + PostgreSQL).
+# The Hytale game server runs directly on the host via systemd+tmux.
+# The helper service runs directly on the host via systemd.
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose logs -f api    # Follow API logs
+#   docker compose down           # Stop all services
+#   docker compose pull && docker compose up -d  # Update
+# ============================================================
+
+services:
+  # ─── PostgreSQL Database ──────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: hytale-panel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hytale_panel
+      POSTGRES_USER: hytale_panel
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Local-only exposure for host-side migrations, seeding, and psql maintenance.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    networks:
+      - panel-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hytale_panel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # PostgreSQL is never exposed to the public internet.
+    # It is only published on 127.0.0.1 for local maintenance tasks.
+
+  # ─── Fastify API Server ───────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    container_name: hytale-panel-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hytale_panel:${DB_PASSWORD:-changeme}@postgres:5432/hytale_panel
+      API_HOST: "0.0.0.0"
+      API_PORT: "4000"
+      NODE_ENV: ${NODE_ENV:-production}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_MAX_AGE_HOURS: ${SESSION_MAX_AGE_HOURS:-4}
+      SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-60}
+      ADMIN_SESSION_IDLE_TIMEOUT_MINUTES: ${ADMIN_SESSION_IDLE_TIMEOUT_MINUTES:-15}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      CSRF_SECRET: ${CSRF_SECRET}
+      HELPER_SOCKET_PATH: /run/hytale-helper/hytale-helper.sock
+      HELPER_HMAC_SECRET: ${HELPER_HMAC_SECRET}
+      TRUST_PROXY: ${TRUST_PROXY:-127.0.0.1}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
+      MAX_FAILED_LOGINS: ${MAX_FAILED_LOGINS:-10}
+      LOCKOUT_DURATION_MINUTES: ${LOCKOUT_DURATION_MINUTES:-30}
+      LOGIN_RATE_LIMIT_MAX: ${LOGIN_RATE_LIMIT_MAX:-5}
+      LOGIN_RATE_LIMIT_WINDOW_MS: ${LOGIN_RATE_LIMIT_WINDOW_MS:-900000}
+      GLOBAL_RATE_LIMIT_MAX: ${GLOBAL_RATE_LIMIT_MAX:-100}
+      GLOBAL_RATE_LIMIT_WINDOW_MS: ${GLOBAL_RATE_LIMIT_WINDOW_MS:-60000}
+      AUDIT_LOG_RETENTION_DAYS: ${AUDIT_LOG_RETENTION_DAYS:-90}
+      CRASH_LOG_RETENTION_DAYS: ${CRASH_LOG_RETENTION_DAYS:-30}
+    volumes:
+      # Mount a stable host directory so helper restarts do not replace the
+      # bind-mounted inode the API container depends on.
+      - /opt/hytale-panel/run:/run/hytale-helper:ro
+    ports:
+      # IMPORTANT: Bind to 127.0.0.1 only — never expose directly to internet.
+      - "127.0.0.1:${API_HOST_PORT:-4000}:4000"
+    networks:
+      - panel-internal
+    user: "1000:1000"
+    group_add:
+      - "${PANEL_SOCKET_GID:-2001}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+
+  # ─── Next.js Web Frontend ─────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+    container_name: hytale-panel-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:4000
+    ports:
+      # Bind to 127.0.0.1 only — served via reverse proxy
+      - "127.0.0.1:${WEB_HOST_PORT:-3000}:3000"
+    networks:
+      - panel-internal
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  panel-internal:
+    driver: bridge

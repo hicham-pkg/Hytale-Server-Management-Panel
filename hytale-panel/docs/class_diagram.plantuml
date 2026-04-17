@@ -1,0 +1,343 @@
+@startuml Hytale Panel Class Diagram
+
+skinparam backgroundColor #1a1a2e
+skinparam defaultFontColor #e0e0e0
+skinparam classBorderColor #4a4a6a
+
+title Hytale Panel - Class & Interface Diagram
+
+' ===== SHARED SCHEMAS =====
+package "Shared (packages/shared)" #2a2a4a {
+
+    class LoginRequest {
+        +username: string
+        +password: string
+    }
+
+    class VerifyTotpRequest {
+        +code: string
+    }
+
+    class SessionInfo {
+        +id: string
+        +userId: string
+        +username: string
+        +role: "admin" | "readonly"
+        +expiresAt: Date
+    }
+
+    class ServerStatus {
+        +state: "running" | "stopped" | "unknown"
+        +pid: number | null
+        +uptime: number | null
+        +lastRestartAt: string | null
+        +playerCount: number | null
+    }
+
+    class SystemStats {
+        +cpuUsagePercent: number
+        +memoryUsedMb: number
+        +memoryTotalMb: number
+        +diskUsedGb: number
+        +diskTotalGb: number
+    }
+
+    class WhitelistEntry {
+        +name: string
+        +addedAt: string
+    }
+
+    class BanEntry {
+        +name: string
+        +reason: string
+        +bannedAt: string
+    }
+
+    class BackupMeta {
+        +id: string
+        +filename: string
+        +label: string | null
+        +sizeBytes: number
+        +sha256: string
+        +createdBy: string
+        +createdAt: string
+    }
+
+    class CrashEvent {
+        +id: string
+        +severity: "info" | "warning" | "error" | "critical"
+        +pattern: string
+        +summary: string
+        +rawLog: string
+        +detectedAt: string
+    }
+
+    class AuditLogEntry {
+        +id: string
+        +userId: string | null
+        +action: string
+        +target: string
+        +details: Record<string, unknown>
+        +ipAddress: string
+        +success: boolean
+        +createdAt: string
+    }
+
+    enum HelperOperation {
+        SERVER_START
+        SERVER_STOP
+        SERVER_RESTART
+        SERVER_STATUS
+        SERVER_SEND_COMMAND
+        LOGS_READ
+        LOGS_STREAM
+        CONSOLE_CAPTURE_PANE
+        WHITELIST_READ
+        WHITELIST_WRITE
+        BANS_READ
+        BANS_WRITE
+        BACKUP_CREATE
+        BACKUP_LIST
+        BACKUP_RESTORE
+        BACKUP_DELETE
+        STATS_SYSTEM
+        STATS_PROCESS
+    }
+
+    class HelperRequest {
+        +operation: HelperOperation
+        +params: Record<string, unknown>
+        +timestamp: number
+        +nonce: string
+        +signature: string
+    }
+
+    class HelperResponse {
+        +success: boolean
+        +data: unknown
+        +error: string | null
+    }
+
+    class ConsoleCommandSchema {
+        +{static} ALLOWED_CHARS: RegExp
+        +{static} MAX_LENGTH: number
+        +{static} validate(cmd: string): boolean
+    }
+}
+
+' ===== API SERVICES =====
+package "API (packages/api)" #2a3a4a {
+
+    interface IAuthService {
+        +login(username: string, password: string, ip: string, ua: string): Promise<{session: SessionInfo, requires2FA: boolean}>
+        +verifyTotp(sessionId: string, code: string): Promise<SessionInfo>
+        +logout(sessionId: string): Promise<void>
+        +getSession(sessionId: string): Promise<SessionInfo | null>
+        +setupTotp(userId: string): Promise<{secret: string, qrDataUrl: string}>
+        +confirmTotp(userId: string, code: string): Promise<boolean>
+        +checkLockout(username: string): Promise<boolean>
+    }
+
+    interface IHelperClient {
+        +send(operation: HelperOperation, params: Record<string, unknown>): Promise<HelperResponse>
+    }
+
+    interface IServerService {
+        +getStatus(): Promise<ServerStatus>
+        +start(): Promise<{success: boolean, message: string}>
+        +stop(): Promise<{success: boolean, message: string}>
+        +restart(): Promise<{success: boolean, message: string}>
+    }
+
+    interface IConsoleService {
+        +sendCommand(command: string): Promise<{success: boolean}>
+        +capturePane(lines: number): Promise<string[]>
+        +startLogStream(callback: (lines: string[]) => void): () => void
+    }
+
+    interface IWhitelistService {
+        +getWhitelist(): Promise<{enabled: boolean, entries: WhitelistEntry[]}>
+        +addPlayer(name: string, serverRunning: boolean): Promise<void>
+        +removePlayer(name: string, serverRunning: boolean): Promise<void>
+        +toggleWhitelist(enabled: boolean, serverRunning: boolean): Promise<void>
+    }
+
+    interface IBanService {
+        +getBans(): Promise<BanEntry[]>
+        +addBan(name: string, reason: string, serverRunning: boolean): Promise<void>
+        +removeBan(name: string, serverRunning: boolean): Promise<void>
+    }
+
+    interface IBackupService {
+        +listBackups(): Promise<BackupMeta[]>
+        +createBackup(label: string | null, userId: string): Promise<BackupMeta>
+        +restoreBackup(backupId: string): Promise<void>
+        +deleteBackup(backupId: string): Promise<void>
+    }
+
+    interface ICrashService {
+        +detectCrashes(): Promise<CrashEvent[]>
+        +getCrashHistory(limit: number, offset: number): Promise<CrashEvent[]>
+    }
+
+    interface IAuditService {
+        +log(userId: string | null, action: string, target: string, details: Record<string, unknown>, ip: string, success: boolean): Promise<void>
+        +getAuditLogs(limit: number, offset: number, userId?: string): Promise<AuditLogEntry[]>
+        +exportAuditLogs(since: Date, until: Date): Promise<AuditLogEntry[]>
+    }
+
+    interface IStatsService {
+        +getSystemStats(): Promise<SystemStats>
+        +getProcessStats(): Promise<{pid: number | null, cpuPercent: number, memoryMb: number}>
+    }
+
+    class AuthService implements IAuthService {
+        -db: DrizzleClient
+        -auditService: IAuditService
+    }
+
+    class HelperClient implements IHelperClient {
+        -socketPath: string
+        -sharedSecret: string
+        +send(operation: HelperOperation, params: Record<string, unknown>): Promise<HelperResponse>
+        -sign(operation: string, params: string, timestamp: number, nonce: string): string
+    }
+
+    class ServerService implements IServerService {
+        -helperClient: IHelperClient
+    }
+
+    class ConsoleService implements IConsoleService {
+        -helperClient: IHelperClient
+        -lastCapture: string[]
+    }
+
+    class WhitelistService implements IWhitelistService {
+        -helperClient: IHelperClient
+        -serverService: IServerService
+    }
+
+    class BanService implements IBanService {
+        -helperClient: IHelperClient
+        -serverService: IServerService
+    }
+
+    class BackupService implements IBackupService {
+        -helperClient: IHelperClient
+        -serverService: IServerService
+        -db: DrizzleClient
+    }
+
+    class CrashService implements ICrashService {
+        -helperClient: IHelperClient
+        -db: DrizzleClient
+        -patterns: CrashPattern[]
+    }
+
+    class AuditService implements IAuditService {
+        -db: DrizzleClient
+    }
+
+    class StatsService implements IStatsService {
+        -helperClient: IHelperClient
+    }
+
+    ' Relationships
+    ServerService --> HelperClient
+    ConsoleService --> HelperClient
+    WhitelistService --> HelperClient
+    WhitelistService --> ServerService
+    BanService --> HelperClient
+    BanService --> ServerService
+    BackupService --> HelperClient
+    BackupService --> ServerService
+    CrashService --> HelperClient
+    StatsService --> HelperClient
+    AuthService --> AuditService
+}
+
+' ===== HELPER SERVICE =====
+package "Helper (packages/helper)" #3a2a4a {
+
+    interface IServerControlHandler {
+        +start(): Promise<{success: boolean, message: string}>
+        +stop(): Promise<{success: boolean, message: string}>
+        +restart(): Promise<{success: boolean, message: string}>
+        +status(): Promise<ServerStatus>
+    }
+
+    interface IConsoleHandler {
+        +sendCommand(command: string): Promise<{success: boolean}>
+        +capturePaneOutput(lines: number): Promise<string[]>
+    }
+
+    interface IFileHandler {
+        +readWhitelist(): Promise<WhitelistEntry[]>
+        +writeWhitelist(entries: WhitelistEntry[]): Promise<void>
+        +readBans(): Promise<BanEntry[]>
+        +writeBans(entries: BanEntry[]): Promise<void>
+    }
+
+    interface IBackupHandler {
+        +create(label: string | null): Promise<{filename: string, sizeBytes: number, sha256: string}>
+        +list(): Promise<{filename: string, sizeBytes: number, createdAt: string}[]>
+        +restore(filename: string): Promise<void>
+        +delete(filename: string): Promise<void>
+    }
+
+    class CommandExecutor {
+        +{static} exec(cmd: string, args: string[], options?: ExecOptions): Promise<{stdout: string, stderr: string, exitCode: number}>
+    }
+
+    class PathGuard {
+        +{static} resolve(basePath: string, userPath: string): string
+        +{static} isWithin(basePath: string, targetPath: string): boolean
+        +{static} rejectSymlinks(path: string): Promise<void>
+    }
+
+    class InputSanitizer {
+        +{static} sanitizeConsoleCommand(cmd: string): string
+        +{static} validateFilename(name: string): boolean
+        +{static} stripAnsiCodes(text: string): string
+    }
+
+    class HmacAuth {
+        -sharedSecret: string
+        +validate(request: HelperRequest): boolean
+        -computeSignature(operation: string, params: string, timestamp: number, nonce: string): string
+        -isTimestampValid(timestamp: number): boolean
+        -isNonceUnused(nonce: string): boolean
+    }
+
+    class ServerControlHandler implements IServerControlHandler {
+        -executor: CommandExecutor
+        -serviceName: string
+    }
+
+    class ConsoleHandler implements IConsoleHandler {
+        -executor: CommandExecutor
+        -sanitizer: InputSanitizer
+        -tmuxSession: string
+    }
+
+    class FileHandler implements IFileHandler {
+        -pathGuard: PathGuard
+        -hytaleRoot: string
+    }
+
+    class BackupHandler implements IBackupHandler {
+        -executor: CommandExecutor
+        -pathGuard: PathGuard
+        -hytaleRoot: string
+        -backupDir: string
+    }
+
+    ServerControlHandler --> CommandExecutor
+    ConsoleHandler --> CommandExecutor
+    ConsoleHandler --> InputSanitizer
+    FileHandler --> PathGuard
+    BackupHandler --> CommandExecutor
+    BackupHandler --> PathGuard
+}
+
+@enduml

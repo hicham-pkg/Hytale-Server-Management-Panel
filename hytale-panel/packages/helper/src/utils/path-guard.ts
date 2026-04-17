@@ -1,0 +1,51 @@
+import * as path from 'path';
+import * as fs from 'fs/promises';
+
+/**
+ * Resolve a path and verify it stays within the allowed base directory.
+ * Rejects symlinks to prevent symlink-based traversal.
+ */
+export async function guardPath(filePath: string, allowedBase: string): Promise<string> {
+  const resolved = path.resolve(filePath);
+  const normalizedBase = path.resolve(allowedBase);
+
+  if (!resolved.startsWith(normalizedBase + path.sep) && resolved !== normalizedBase) {
+    throw new Error(`Path traversal blocked: ${filePath} is outside ${allowedBase}`);
+  }
+
+  try {
+    const real = await fs.realpath(resolved);
+    if (!real.startsWith(normalizedBase + path.sep) && real !== normalizedBase) {
+      throw new Error(`Symlink traversal blocked: ${filePath} resolves outside ${allowedBase}`);
+    }
+    return real;
+  } catch (err: unknown) {
+    const e = err as { code?: string };
+    if (e.code === 'ENOENT') {
+      // File doesn't exist yet — check parent directory
+      const parentDir = path.dirname(resolved);
+      try {
+        const realParent = await fs.realpath(parentDir);
+        if (!realParent.startsWith(normalizedBase + path.sep) && realParent !== normalizedBase) {
+          throw new Error(`Parent symlink traversal blocked: ${filePath}`);
+        }
+      } catch {
+        // Parent doesn't exist either — only allow if resolved path is within base
+      }
+      return resolved;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Verify a path is a regular file (not a symlink, directory, etc.)
+ */
+export async function isRegularFile(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(filePath);
+    return stat.isFile() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}

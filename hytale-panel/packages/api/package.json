@@ -1,0 +1,39 @@
+{
+  "name": "@hytale-panel/api",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "migrate": "tsx src/db/migrate.ts",
+    "seed": "tsx ../scripts/seed.ts"
+  },
+  "dependencies": {
+    "@hytale-panel/shared": "workspace:*",
+    "@fastify/cookie": "^9.3.0",
+    "@fastify/cors": "^9.0.0",
+    "@fastify/helmet": "^11.1.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/websocket": "^10.0.0",
+    "argon2": "^0.40.0",
+    "drizzle-orm": "^0.31.0",
+    "fastify": "^4.28.0",
+    "fastify-plugin": "^4.5.0",
+    "node-cron": "^3.0.3",
+    "otpauth": "^9.3.0",
+    "pg": "^8.12.0",
+    "qrcode": "^1.5.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.0",
+    "@types/qrcode": "^1.5.5",
+    "drizzle-kit": "^0.22.0",
+    "tsx": "^4.15.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0"
+  }
+}

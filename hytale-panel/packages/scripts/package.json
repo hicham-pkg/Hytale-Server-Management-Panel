@@ -1,0 +1,18 @@
+{
+  "name": "@hytale-panel/scripts",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "seed": "tsx seed.ts",
+    "generate-secret": "tsx generate-helper-secret.ts"
+  },
+  "dependencies": {
+    "argon2": "^0.40.0",
+    "drizzle-orm": "^0.33.0",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.16.0",
+    "@types/pg": "^8.11.0"
+  }
+}

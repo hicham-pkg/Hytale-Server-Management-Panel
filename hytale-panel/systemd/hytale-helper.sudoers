@@ -1,0 +1,25 @@
+# ============================================================
+# Hytale Panel Helper — Legacy Sudoers Rules
+# ============================================================
+# This file is kept only as a migration reference for older deployments.
+# The shipped helper now runs as root with a tight local-only systemd sandbox,
+# so install.sh no longer deploys this sudoers file by default.
+#
+# SECURITY NOTES:
+# - Only these EXACT commands are allowed. No wildcards on dangerous ops.
+# - In the old model, the helper service ran as hytale-helper (non-root).
+# - These rules only granted sudo for systemctl and journalctl.
+# - The current shipped install no longer depends on this file.
+# - The journalctl wildcard (*) is safe because journalctl does not
+#   execute arbitrary commands — it only reads logs.
+# ============================================================
+
+# Allow helper to manage the Hytale tmux service
+hytale-helper ALL=(root) NOPASSWD: /usr/bin/systemctl start hytale-tmux.service
+hytale-helper ALL=(root) NOPASSWD: /usr/bin/systemctl stop hytale-tmux.service
+hytale-helper ALL=(root) NOPASSWD: /usr/bin/systemctl restart hytale-tmux.service
+hytale-helper ALL=(root) NOPASSWD: /usr/bin/systemctl status hytale-tmux.service
+hytale-helper ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed hytale-tmux.service
+
+# Allow helper to read journal logs for the service
+hytale-helper ALL=(root) NOPASSWD: /usr/bin/journalctl -u hytale-tmux.service *

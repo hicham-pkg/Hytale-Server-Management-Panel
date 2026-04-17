@@ -1,0 +1,21 @@
+{
+  "name": "hytale-panel",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "preinstall": "npx only-allow pnpm",
+    "build:shared": "pnpm --filter @hytale-panel/shared build",
+    "build:helper": "pnpm --filter @hytale-panel/helper build",
+    "build:api": "pnpm --filter @hytale-panel/api build",
+    "build:web": "pnpm --filter @hytale-panel/web build",
+    "build": "pnpm run build:shared && pnpm run build:helper && pnpm run build:api && pnpm run build:web",
+    "seed": "cd packages/scripts && npx tsx seed.ts",
+    "generate-secret": "cd packages/scripts && npx tsx generate-helper-secret.ts",
+    "test": "pnpm exec vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0",
+    "zod": "^3.23.8"
+  }
+}

@@ -1,0 +1,176 @@
+@startuml Hytale Panel Sequence Diagrams
+
+skinparam backgroundColor #1a1a2e
+skinparam defaultFontColor #e0e0e0
+skinparam sequenceLifeLineBorderColor #4a4a6a
+skinparam sequenceArrowColor #7c7cff
+
+title Hytale Panel - Key Sequence Diagrams
+
+' ===== 1. LOGIN FLOW =====
+== Authentication Flow ==
+
+actor Admin as user
+participant "Next.js\nFrontend" as web
+participant "Fastify\nAPI" as api
+database "PostgreSQL" as db
+
+user -> web: Enter credentials
+web -> api: POST /api/auth/login
+    note right
+        Input: {
+            "username": "string",
+            "password": "string"
+        }
+    end note
+api -> db: SELECT * FROM users\nWHERE username = $1
+db --> api: User record
+api -> api: Check lockout status
+api -> api: Verify Argon2 hash
+alt Password invalid
+    api -> db: UPDATE users SET\nfailed_login_attempts += 1
+    api -> db: INSERT INTO audit_logs\n(action: 'login_failed')
+    api --> web: 401 Unauthorized
+else Password valid, 2FA enabled
+    api -> db: INSERT INTO sessions\n(pending_2fa: true)
+    api --> web: 200 {requires2FA: true, sessionId: "..."}
+    user -> web: Enter TOTP code
+    web -> api: POST /api/auth/verify-totp
+        note right
+            Input: {
+                "code": "123456"
+            }
+        end note
+    api -> api: Verify TOTP code
+    api -> db: UPDATE sessions SET\npending_2fa = false
+    api -> db: UPDATE users SET\nfailed_login_attempts = 0
+    api -> db: INSERT INTO audit_logs\n(action: 'login_success')
+    api --> web: 200 Set-Cookie: session_id\n{user: {id, username, role}}
+else Password valid, no 2FA
+    api -> db: INSERT INTO sessions
+    api -> db: UPDATE users SET\nfailed_login_attempts = 0
+    api -> db: INSERT INTO audit_logs\n(action: 'login_success')
+    api --> web: 200 Set-Cookie: session_id\n{user: {id, username, role}}
+end
+
+' ===== 2. SERVER CONTROL FLOW =====
+== Server Restart Flow ==
+
+user -> web: Click "Restart Server"
+web -> web: Show confirmation dialog
+user -> web: Confirm restart
+web -> api: POST /api/server/restart\nCookie: session_id\nX-CSRF-Token: token
+api -> api: Validate session
+api -> api: Check role == 'admin'
+api -> api: Validate CSRF token
+
+participant "Helper\nService" as helper
+participant "Host OS\n(systemd/tmux)" as host
+
+api -> helper: Unix Socket POST /execute
+    note right
+        Input: {
+            "operation": "SERVER_RESTART",
+            "params": {},
+            "timestamp": 1711234567,
+            "nonce": "uuid-v4",
+            "signature": "hmac-sha256-hex"
+        }
+    end note
+helper -> helper: Validate HMAC signature
+helper -> helper: Validate timestamp (±30s)
+helper -> helper: Check nonce uniqueness
+helper -> host: sudo systemctl restart\nhytale-tmux.service
+host --> helper: Exit code 0
+helper --> api: {success: true, message: "Server restarting"}
+    note right
+        Output: {
+            "success": true,
+            "data": {
+                "message": "Server restart initiated"
+            },
+            "error": null
+        }
+    end note
+api -> db: INSERT INTO audit_logs\n(action: 'server_restart',\nsuccess: true)
+api --> web: 200 {success: true, message: "..."}
+web -> web: Show success toast
+web -> web: Poll /api/server/status
+
+' ===== 3. LIVE CONSOLE FLOW =====
+== Live Console WebSocket Flow ==
+
+user -> web: Navigate to Console page
+web -> api: WS Upgrade /ws/console\nCookie: session_id
+api -> api: Validate session cookie\nin upgrade handler
+api -> api: Validate Origin header
+api --> web: 101 Switching Protocols
+api -> web: {type: "connected",\nserverStatus: "running"}
+
+web -> api: {type: "subscribe"}
+loop Every 500ms
+    api -> helper: POST /execute\n{op: CONSOLE_CAPTURE_PANE,\nparams: {lines: 100}}
+    helper -> host: tmux -S /opt/hytale/run/hytale.tmux.sock\ncapture-pane -t hytale -p -S -100
+    host --> helper: Raw pane output
+    helper -> helper: Strip ANSI codes
+    helper --> api: {success: true, data: {lines: [...]}}
+    api -> api: Diff with previous capture
+    alt New lines detected
+        api -> web: {type: "log",\nlines: ["new line 1", ...],\ntimestamp: "..."}
+    end
+end
+
+user -> web: Type "whitelist add Player1"
+web -> api: {type: "command",\ndata: "whitelist add Player1"}
+api -> api: Validate command against\nallowlist regex
+api -> api: Check role == 'admin'
+api -> helper: POST /execute\n{op: SERVER_SEND_COMMAND,\nparams: {command: "whitelist add Player1"}}
+helper -> helper: Sanitize command\n(character allowlist)
+helper -> host: tmux -S /opt/hytale/run/hytale.tmux.sock\nsend-keys -t hytale 'whitelist add Player1' Enter
+host --> helper: Success
+helper --> api: {success: true}
+api -> db: INSERT INTO audit_logs\n(action: 'console_command',\ntarget: 'whitelist add Player1')
+api -> web: {type: "commandResult",\nsuccess: true}
+
+' ===== 4. BACKUP RESTORE FLOW =====
+== Backup Restore Flow ==
+
+user -> web: Select backup to restore
+web -> web: Show warning dialog:\n"This will replace current world data"
+user -> web: Confirm restore
+web -> web: Show second confirmation:\n"Type RESTORE to confirm"
+user -> web: Types "RESTORE"
+web -> api: POST /api/backups/{id}/restore\nCookie: session_id\nX-CSRF-Token: token
+api -> api: Validate session + admin role
+
+api -> helper: POST /execute\n{op: SERVER_STATUS}
+helper -> host: systemctl status\nhytale-tmux.service
+host --> helper: Status response
+helper --> api: {state: "running"}
+
+alt Server is running
+    api --> web: 409 {error: "Server must be\nstopped before restore"}
+else Server is stopped
+    api -> helper: POST /execute\n{op: BACKUP_CREATE,\nparams: {label: "safety-pre-restore"}}
+    helper -> host: tar -czf safety-snapshot.tar.gz\n-C /opt/hytale/Server worlds/
+    host --> helper: Backup created
+    helper --> api: {success: true, data: {filename, sha256}}
+    api -> db: INSERT INTO backup_metadata\n(label: 'safety-pre-restore')
+
+    api -> db: SELECT * FROM backup_metadata\nWHERE id = $1
+    db --> api: Backup record
+
+    api -> helper: POST /execute\n{op: BACKUP_RESTORE,\nparams: {filename: "..."}}
+    helper -> helper: Validate filename format
+    helper -> helper: Resolve path, check prefix
+    helper -> helper: Validate tar contents\n(no absolute paths,\nno symlinks, no escape)
+    helper -> host: rm -rf /opt/hytale/Server/worlds/*
+    helper -> host: tar -xzf backup.tar.gz\n-C /opt/hytale/Server/
+    host --> helper: Restore complete
+    helper --> api: {success: true}
+
+    api -> db: INSERT INTO audit_logs\n(action: 'backup_restore',\ntarget: backup_id)
+    api --> web: 200 {success: true,\nmessage: "Restore complete.\nSafety snapshot created."}
+end
+
+@enduml

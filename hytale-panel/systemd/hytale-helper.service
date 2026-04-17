@@ -1,0 +1,65 @@
+# ============================================================
+# Hytale Panel — Privileged Helper Service
+# ============================================================
+# This service runs on the HOST (not in Docker) and provides
+# a Unix socket API for the panel to execute privileged
+# operations: systemctl, tmux, file I/O, backups.
+#
+# It runs as root with a tight local-only systemd sandbox so it can manage
+# hytale-tmux.service directly without brittle sudo/NoNewPrivileges conflicts.
+# Only the panel API container can connect to its Unix socket.
+#
+# Host socket path: /opt/hytale-panel/run/hytale-helper.sock
+#
+# Install:
+#   sudo cp hytale-helper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hytale-helper.service
+#
+# Logs:
+#   journalctl -u hytale-helper.service -f
+# ============================================================
+
+[Unit]
+Description=Hytale Panel Privileged Helper
+After=network.target
+Documentation=https://github.com/your-repo/hytale-panel
+
+[Service]
+Type=simple
+User=root
+Group=hytale-panel
+SupplementaryGroups=hytale
+WorkingDirectory=/opt/hytale-panel/helper
+ExecStartPre=/usr/bin/install -d -o root -g hytale-panel -m 0770 /opt/hytale-panel/run
+ExecStart=/usr/bin/node /opt/hytale-panel/helper/dist/index.js
+Restart=always
+RestartSec=5
+
+# Environment file with HMAC secret and paths
+EnvironmentFile=/opt/hytale-panel/helper/.env
+
+# Security hardening
+# This service already runs as root, so it executes the narrow allowlisted
+# systemctl/journalctl operations directly instead of through sudo.
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+LockPersonality=true
+# The helper only needs local Unix sockets: its own Fastify socket and the
+# host-side AF_UNIX transports used by sudo/systemd/tmux tooling.
+RestrictAddressFamilies=AF_UNIX
+# MemoryDenyWriteExecute is intentionally omitted because Node.js relies on JIT
+# memory mappings and this service would fail to start with that restriction.
+ReadWritePaths=/opt/hytale /opt/hytale-backups /opt/hytale-panel/run
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=1024
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
