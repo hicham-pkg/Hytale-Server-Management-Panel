@@ -6,17 +6,18 @@
 # It creates users, directories, installs systemd units, generates
 # secrets, and prepares everything for Docker Compose deployment.
 #
-# Usage: sudo ./install.sh
+# Usage: sudo ./install.sh [-y|--yes|--non-interactive]
 #
 # What this script does:
 #   1. Installs system dependencies (tmux, docker, curl, openssl, pnpm)
 #   2. Creates the hytale user and keeps the legacy hytale-helper account aligned if present
-#   3. Sets up directories with correct permissions
-#   4. Installs systemd service units
-#   5. Retires legacy helper sudoers rules and stale manual drop-ins
-#   6. Generates cryptographic secrets
-#   7. Deploys the helper service
-#   8. Reloads systemd, starts the panel stack, runs migrations, and verifies health
+#   3. Detects or prompts for the Hytale game server directory
+#   4. Sets up directories with correct permissions
+#   5. Installs systemd service units
+#   6. Retires legacy helper sudoers rules and stale manual drop-ins
+#   7. Generates cryptographic secrets
+#   8. Deploys the helper service, reloads systemd, brings up containers, runs migrations
+#   9. Runs scripts/doctor.sh to verify the installation is healthy
 #
 # What this script does NOT do:
 #   - Install the Hytale game server (you must do that separately)
@@ -48,6 +49,15 @@ HELPER_OVERRIDE_DIR="/etc/systemd/system/hytale-helper.service.d"
 HELPER_OVERRIDE_FILE="${HELPER_OVERRIDE_DIR}/override.conf"
 PNPM_CMD=()
 CREATED_ROOT_ENV=0
+NON_INTERACTIVE=0
+HYTALE_SERVER_PATH=""
+HYTALE_ROOT_PATH=""
+CANDIDATE_HYTALE_SERVER_PATHS=(
+  "/opt/hytale/Server"
+  "/srv/hytale/Server"
+  "/home/hytale/Server"
+  "/var/games/hytale/Server"
+)
 
 read_env_value() {
   local file="$1"
@@ -172,7 +182,7 @@ prompt_for_initial_env_setup() {
   local cors_origin
   local ws_allowed_origins
 
-  if [ "$CREATED_ROOT_ENV" -ne 1 ] || [ ! -t 0 ]; then
+  if [ "$CREATED_ROOT_ENV" -ne 1 ] || [ ! -t 0 ] || [ "$NON_INTERACTIVE" -eq 1 ]; then
     return 0
   fi
 
@@ -253,8 +263,8 @@ prompt_for_admin_seed() {
   local admin_password
   local confirm_password
 
-  if [ ! -t 0 ]; then
-    log_warn "No interactive terminal detected; skipping optional first-admin prompt"
+  if [ ! -t 0 ] || [ "$NON_INTERACTIVE" -eq 1 ]; then
+    log_warn "Skipping optional first-admin prompt (non-interactive)"
     return 0
   fi
 
@@ -357,6 +367,144 @@ deploy_helper_runtime() {
   cp "$staging_dir/package.json" "$deploy_dir/"
 }
 
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -y|--yes|--non-interactive)
+        NON_INTERACTIVE=1
+        shift
+        ;;
+      -h|--help)
+        cat <<'USAGE'
+Usage: sudo ./install.sh [-y|--yes|--non-interactive]
+
+  -y, --yes, --non-interactive
+      Skip interactive prompts (preflight confirmation, env customization,
+      admin seeding, Hytale world fallback). Missing detection defaults to
+      /opt/hytale/Server.
+  -h, --help
+      Show this help and exit.
+USAGE
+        exit 0
+        ;;
+      *)
+        log_warn "Unknown argument: $1 (ignored)"
+        shift
+        ;;
+    esac
+  done
+
+  # Update-panel.sh and other automation call install.sh with SKIP_* env vars.
+  # Treat that as non-interactive so we don't block on prompts inside CI.
+  if [ "${SKIP_PANEL_BRINGUP:-0}" = "1" ] || [ "${SKIP_HELPER_BUILD:-0}" = "1" ] || [ "${SKIP_SYSTEM_DEPS:-0}" = "1" ]; then
+    NON_INTERACTIVE=1
+  fi
+}
+
+preflight_summary() {
+  local response
+
+  cat <<SUMMARY
+
+Preflight summary — this script will:
+  [1/9]  Install system dependencies (tmux, docker, node 20, pnpm)
+  [2/9]  Create the hytale user + hytale-panel group (GID ${PANEL_SOCKET_GID})
+  [3/9]  Detect or choose the Hytale server directory
+  [4/9]  Create /opt/hytale, /opt/hytale-backups, /opt/hytale-panel with correct owners
+  [5/9]  Install systemd units (hytale-helper.service, hytale-tmux.service)
+  [6/9]  Retire legacy helper sudoers and override drop-ins
+  [7/9]  Generate SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD in .env
+  [8/9]  Build and deploy the helper, reload systemd, bring up panel containers, run migrations
+  [9/9]  Run scripts/doctor.sh and fail fast if anything looks wrong
+
+SUMMARY
+
+  if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+    log_info "Non-interactive mode — proceeding without confirmation"
+    return 0
+  fi
+
+  printf 'Press Enter to continue, or Ctrl-C to abort: '
+  read -r response
+}
+
+detect_hytale_world() {
+  local found=()
+  local path
+  local candidate
+  local response
+  local choice
+  local i
+  local input_path
+
+  for path in "${CANDIDATE_HYTALE_SERVER_PATHS[@]}"; do
+    if [ -d "$path" ] && { [ -f "$path/HytaleServer.jar" ] || [ -f "$path/server.jar" ]; }; then
+      found+=("$path")
+    fi
+  done
+
+  if [ "${#found[@]}" -eq 1 ]; then
+    candidate="${found[0]}"
+    log_ok "Detected Hytale server directory: $candidate"
+    if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+      HYTALE_SERVER_PATH="$candidate"
+    else
+      printf 'Use this directory? [Y/n]: '
+      read -r response
+      case "${response:-Y}" in
+        [Nn]*) HYTALE_SERVER_PATH="" ;;
+        *)     HYTALE_SERVER_PATH="$candidate" ;;
+      esac
+    fi
+  elif [ "${#found[@]}" -gt 1 ]; then
+    log_info "Multiple Hytale server directories detected:"
+    i=1
+    for path in "${found[@]}"; do
+      printf '  %d) %s\n' "$i" "$path"
+      i=$((i + 1))
+    done
+    if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+      HYTALE_SERVER_PATH="${found[0]}"
+      log_info "Non-interactive mode — selecting ${HYTALE_SERVER_PATH}"
+    else
+      while true; do
+        printf 'Select a directory [1-%d]: ' "${#found[@]}"
+        read -r choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#found[@]}" ]; then
+          HYTALE_SERVER_PATH="${found[$((choice - 1))]}"
+          break
+        fi
+        log_warn "Enter a number between 1 and ${#found[@]}."
+      done
+    fi
+  fi
+
+  if [ -z "$HYTALE_SERVER_PATH" ]; then
+    if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+      HYTALE_SERVER_PATH="/opt/hytale/Server"
+      log_warn "No Hytale server found — defaulting to ${HYTALE_SERVER_PATH} (install game files there later)"
+    else
+      log_warn "No Hytale server directory detected at any of:"
+      for path in "${CANDIDATE_HYTALE_SERVER_PATHS[@]}"; do
+        printf '    %s\n' "$path"
+      done
+      printf 'Enter a path now (or press Enter to default to /opt/hytale/Server): '
+      read -r input_path
+      HYTALE_SERVER_PATH="${input_path:-/opt/hytale/Server}"
+    fi
+  fi
+
+  HYTALE_ROOT_PATH="$(dirname "$HYTALE_SERVER_PATH")"
+  log_ok "Using HYTALE_ROOT=$HYTALE_ROOT_PATH, Server dir=$HYTALE_SERVER_PATH"
+
+  if [ "$HYTALE_SERVER_PATH" != "/opt/hytale/Server" ]; then
+    log_warn "Non-default Hytale path selected — hytale-tmux.service still references /opt/hytale."
+    log_warn "Edit systemd/hytale-tmux.service and bind-mount or symlink $HYTALE_SERVER_PATH if the tmux game server needs those game files."
+  fi
+}
+
+parse_args "$@"
+
 echo ""
 echo "============================================"
 echo "  Hytale Panel — Installation Script"
@@ -383,11 +531,13 @@ fi
 
 determine_panel_socket_gid
 
+preflight_summary
+
 # ─── Step 1: System Dependencies ───────────────────────────
 if [ "${SKIP_SYSTEM_DEPS:-0}" = "1" ]; then
-  log_info "[1/8] Skipping system dependency installation (SKIP_SYSTEM_DEPS=1)"
+  log_info "[1/9] Skipping system dependency installation (SKIP_SYSTEM_DEPS=1)"
 else
-  log_info "[1/8] Installing system dependencies..."
+  log_info "[1/9] Installing system dependencies..."
   apt-get update -qq
   apt-get install -y -qq tmux curl openssl bc
 
@@ -447,7 +597,7 @@ else
 fi
 
 # ─── Step 2: System Users ──────────────────────────────────
-log_info "[2/8] Creating system users and groups..."
+log_info "[2/9] Creating system users and groups..."
 
 ensure_panel_socket_group
 
@@ -469,11 +619,14 @@ fi
 # have files owned by it, even though the shipped helper service now runs as root.
 usermod -g "$PANEL_SOCKET_GROUP" -aG hytale hytale-helper 2>/dev/null || true
 
-# ─── Step 3: Directories ───────────────────────────────────
-log_info "[3/8] Setting up directories..."
+# ─── Step 3: Hytale World Auto-Detection ───────────────────
+log_info "[3/9] Detecting or selecting the Hytale server directory..."
+detect_hytale_world
+
+# ─── Step 4: Directories ───────────────────────────────────
+log_info "[4/9] Setting up directories..."
 
 mkdir -p /opt/hytale
-mkdir -p /opt/hytale/Server
 mkdir -p /opt/hytale/run
 mkdir -p /opt/hytale/tmp
 mkdir -p /opt/hytale-backups
@@ -481,9 +634,16 @@ mkdir -p /opt/hytale-panel
 mkdir -p /opt/hytale-panel/helper
 mkdir -p "$HELPER_RUNTIME_DIR"
 
+if [ "$HYTALE_SERVER_PATH" = "/opt/hytale/Server" ]; then
+  mkdir -p /opt/hytale/Server
+fi
+
 # Ownership and permissions
 chown hytale:hytale /opt/hytale
-chown -R hytale:hytale /opt/hytale/Server
+if [ -d "$HYTALE_SERVER_PATH" ]; then
+  chown -R hytale:hytale "$HYTALE_SERVER_PATH" 2>/dev/null || \
+    log_warn "Could not chown $HYTALE_SERVER_PATH — ensure the hytale user can read/write game files"
+fi
 chown hytale:hytale /opt/hytale/run
 chmod 770 /opt/hytale/run
 chown hytale:hytale /opt/hytale/tmp
@@ -497,8 +657,8 @@ chmod 770 "$HELPER_RUNTIME_DIR"
 
 log_ok "Directories created with correct permissions"
 
-# ─── Step 4: Systemd Services ──────────────────────────────
-log_info "[4/8] Installing systemd services..."
+# ─── Step 5: Systemd Services ──────────────────────────────
+log_info "[5/9] Installing systemd services..."
 
 cp "$PANEL_DIR/systemd/hytale-tmux.service" /etc/systemd/system/
 cp "$PANEL_DIR/systemd/hytale-helper.service" /etc/systemd/system/
@@ -506,8 +666,8 @@ retire_legacy_helper_override
 
 log_ok "Systemd units installed"
 
-# ─── Step 5: Retire Legacy Helper Overrides ────────────────
-log_info "[5/8] Retiring legacy helper overrides..."
+# ─── Step 6: Retire Legacy Helper Overrides ────────────────
+log_info "[6/9] Retiring legacy helper overrides..."
 
 if [ -f /etc/sudoers.d/hytale-helper ]; then
   rm -f /etc/sudoers.d/hytale-helper
@@ -516,8 +676,8 @@ else
   log_ok "No legacy helper sudoers file present"
 fi
 
-# ─── Step 6: Generate Secrets ──────────────────────────────
-log_info "[6/8] Generating cryptographic secrets..."
+# ─── Step 7: Generate Secrets ──────────────────────────────
+log_info "[7/9] Generating cryptographic secrets..."
 
 if [ ! -f "$PANEL_DIR/.env" ]; then
   cp "$PANEL_DIR/.env.example" "$PANEL_DIR/.env"
@@ -562,8 +722,8 @@ log_warn "IMPORTANT: Edit .env to set CORS_ORIGIN and WS_ALLOWED_ORIGINS to your
 echo "    Example: CORS_ORIGIN=https://panel.yourdomain.com"
 echo ""
 
-# ─── Step 7: Helper Service Setup ──────────────────────────
-log_info "[7/8] Setting up helper service..."
+# ─── Step 8: Helper Service Setup & Panel Bring-Up ─────────
+log_info "[8/9] Deploying helper service and bringing up the panel..."
 
 # Extract HMAC secret from .env
 HMAC_SECRET="$(read_env_value "$PANEL_DIR/.env" HELPER_HMAC_SECRET)"
@@ -581,16 +741,16 @@ HELPER_SOCKET_PATH=$STABLE_HELPER_SOCKET_PATH
 HELPER_HMAC_SECRET=$HMAC_SECRET
 
 # Hytale server paths
-HYTALE_ROOT=/opt/hytale
+HYTALE_ROOT=$HYTALE_ROOT_PATH
 BACKUP_PATH=/opt/hytale-backups
 HYTALE_SERVICE_NAME=hytale-tmux.service
 TMUX_SESSION=hytale
 TMUX_SOCKET_PATH=/opt/hytale/run/hytale.tmux.sock
 
 # Game server file paths
-WHITELIST_PATH=/opt/hytale/Server/whitelist.json
-BANS_PATH=/opt/hytale/Server/bans.json
-WORLDS_PATH=/opt/hytale/Server/worlds
+WHITELIST_PATH=$HYTALE_SERVER_PATH/whitelist.json
+BANS_PATH=$HYTALE_SERVER_PATH/bans.json
+WORLDS_PATH=$HYTALE_SERVER_PATH/worlds
 HELPEREOF
 
   chown root:"$PANEL_SOCKET_GROUP" "$HELPER_ENV_FILE"
@@ -607,14 +767,14 @@ fi
 
 set_env_var "$HELPER_ENV_FILE" HELPER_SOCKET_PATH "$STABLE_HELPER_SOCKET_PATH"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" HELPER_HMAC_SECRET "$HMAC_SECRET"
-ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_ROOT /opt/hytale
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_ROOT "$HYTALE_ROOT_PATH"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" BACKUP_PATH /opt/hytale-backups
 ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SERVICE_NAME hytale-tmux.service
 ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SESSION hytale
 ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SOCKET_PATH /opt/hytale/run/hytale.tmux.sock
-ensure_env_var_if_missing "$HELPER_ENV_FILE" WHITELIST_PATH /opt/hytale/Server/whitelist.json
-ensure_env_var_if_missing "$HELPER_ENV_FILE" BANS_PATH /opt/hytale/Server/bans.json
-ensure_env_var_if_missing "$HELPER_ENV_FILE" WORLDS_PATH /opt/hytale/Server/worlds
+ensure_env_var_if_missing "$HELPER_ENV_FILE" WHITELIST_PATH "$HYTALE_SERVER_PATH/whitelist.json"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" BANS_PATH "$HYTALE_SERVER_PATH/bans.json"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" WORLDS_PATH "$HYTALE_SERVER_PATH/worlds"
 chown root:"$PANEL_SOCKET_GROUP" "$HELPER_ENV_FILE"
 chmod 640 "$HELPER_ENV_FILE"
 
@@ -644,8 +804,8 @@ elif [ -d "$PANEL_DIR/packages/helper" ]; then
   cd "$PANEL_DIR"
 fi
 
-# ─── Step 8: Reload Systemd ────────────────────────────────
-log_info "[8/8] Reloading systemd..."
+# Reload systemd and bring up the panel stack (continuation of [8/9])
+log_info "Reloading systemd and bringing up the panel stack..."
 systemctl daemon-reload
 
 if systemctl list-unit-files hytale.service >/dev/null 2>&1; then
@@ -706,6 +866,28 @@ fi
 
 log_ok "Systemd reloaded"
 
+# ─── Step 9: Doctor Verification ───────────────────────────
+if [ "${SKIP_PANEL_BRINGUP:-0}" = "1" ]; then
+  log_info "[9/9] Skipping doctor verification because SKIP_PANEL_BRINGUP=1"
+else
+  log_info "[9/9] Running scripts/doctor.sh to verify the installation..."
+  if bash "$PANEL_DIR/scripts/doctor.sh"; then
+    log_ok "Doctor verification passed"
+  else
+    echo ""
+    echo "============================================"
+    log_error "Doctor verification FAILED"
+    echo "============================================"
+    echo ""
+    echo "The install finished but doctor found problems."
+    echo "Review the output above, then re-run:"
+    echo "  bash scripts/doctor.sh          # re-check"
+    echo "  bash scripts/doctor.sh --fix    # attempt safe auto-fixes"
+    echo ""
+    exit 1
+  fi
+fi
+
 # ─── Summary ───────────────────────────────────────────────
 echo ""
 echo "============================================"
@@ -729,7 +911,7 @@ echo "  - Health:  bash scripts/doctor.sh"
 echo "  - Smoke:   bash scripts/smoke-test.sh"
 echo ""
 echo "Next steps:"
-echo "  1. Install the Hytale server files under /opt/hytale and create /opt/hytale/start.sh"
+echo "  1. Install the Hytale server files under ${HYTALE_SERVER_PATH} and create ${HYTALE_ROOT_PATH}/start.sh"
 echo "  2. Start the tmux-managed game server when ready:"
 echo "     sudo systemctl enable hytale-tmux.service"
 echo "     sudo systemctl restart hytale-tmux.service"
