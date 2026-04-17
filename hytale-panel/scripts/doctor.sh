@@ -864,7 +864,7 @@ check_hytale_world() {
       if sudo -n test -d "$path" 2>/dev/null || [ -d "$path" ]; then
         ok "$label/ directory exists ($path)"
       else
-        fail "$label/ directory missing ($path)" "ensure Hytale server is installed and WORLDS_PATH points at the right directory"
+        warn "$label/ directory missing ($path)" "Hytale creates worlds/ on first launch; install game files and start hytale-tmux.service"
       fi
     fi
   done
