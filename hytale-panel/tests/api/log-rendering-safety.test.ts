@@ -1,28 +1,17 @@
 import { describe, it, expect } from 'vitest';
+import { stripAnsi } from '@hytale-panel/shared';
+import { escapeHtml } from '../../packages/api/src/utils/sanitize';
 
 /**
  * Log Rendering Safety Tests
  * Tests XSS prevention in log output, ANSI stripping,
  * and HTML escaping for safe rendering.
+ *
+ * Note: `sanitizeLogLine` (singular) was removed in favor of inlining
+ * `stripAnsi` directly. The production path is `sanitizeLogLines`
+ * which simply does `lines.map(stripAnsi)` — the per-line tests below
+ * call `stripAnsi` directly for the same coverage.
  */
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
-}
-
-function stripAnsi(str: string): string {
-  // eslint-disable-next-line no-control-regex
-  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-}
-
-function sanitizeLogLine(line: string): string {
-  return stripAnsi(line);
-}
 
 describe('Log Rendering Safety — HTML Escaping', () => {
   it('should escape < and > to prevent tag injection', () => {
@@ -114,22 +103,22 @@ describe('Log Rendering Safety — ANSI Stripping', () => {
   });
 });
 
-describe('Log Rendering Safety — Sanitize Log Line', () => {
+describe('Log Rendering Safety — Per-line Sanitization', () => {
   it('should strip ANSI and return clean text', () => {
     const line = '\x1b[31m[ERROR]\x1b[0m World crashed';
-    expect(sanitizeLogLine(line)).toBe('[ERROR] World crashed');
+    expect(stripAnsi(line)).toBe('[ERROR] World crashed');
   });
 
   it('should preserve normal log content', () => {
     const line = '[2024-03-15 10:30:00] Player1 joined the game';
-    expect(sanitizeLogLine(line)).toBe(line);
+    expect(stripAnsi(line)).toBe(line);
   });
 
   it('should handle log lines with HTML-like content from game', () => {
     // Game might output angle brackets in chat or errors
     const line = 'Player said: <hello>';
-    const sanitized = sanitizeLogLine(line);
-    // sanitizeLogLine only strips ANSI — React's default escaping handles XSS
+    const sanitized = stripAnsi(line);
+    // stripAnsi only strips ANSI — React's default escaping handles XSS
     expect(sanitized).toBe('Player said: <hello>');
     // But escapeHtml would make it safe for raw HTML contexts
     expect(escapeHtml(sanitized)).toBe('Player said: &lt;hello&gt;');
@@ -143,7 +132,7 @@ describe('Log Rendering Safety — Batch Sanitization', () => {
       '\x1b[33m[WARN]\x1b[0m Low memory',
       '\x1b[31m[ERROR]\x1b[0m Crash detected',
     ];
-    const sanitized = lines.map(sanitizeLogLine);
+    const sanitized = lines.map(stripAnsi);
     expect(sanitized).toEqual([
       '[INFO] Server started',
       '[WARN] Low memory',
@@ -152,7 +141,7 @@ describe('Log Rendering Safety — Batch Sanitization', () => {
   });
 
   it('should handle empty array', () => {
-    const sanitized = ([] as string[]).map(sanitizeLogLine);
+    const sanitized = ([] as string[]).map(stripAnsi);
     expect(sanitized).toEqual([]);
   });
 });
