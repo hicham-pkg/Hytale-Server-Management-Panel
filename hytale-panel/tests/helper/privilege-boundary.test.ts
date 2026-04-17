@@ -34,6 +34,7 @@ function validateTimestamp(timestamp: number): boolean {
 
 describe('Helper Privilege Boundary — Allowlisted Operations', () => {
   const expectedOps = [
+    'helper.ping',
     'server.start', 'server.stop', 'server.restart', 'server.status',
     'server.sendCommand', 'logs.read', 'console.capturePane',
     'whitelist.read', 'whitelist.write', 'bans.read', 'bans.write',
@@ -42,8 +43,8 @@ describe('Helper Privilege Boundary — Allowlisted Operations', () => {
     'stats.system', 'stats.process',
   ];
 
-  it('should define exactly 18 allowed operations', () => {
-    expect(HELPER_OPERATIONS).toHaveLength(18);
+  it('should define exactly 19 allowed operations', () => {
+    expect(HELPER_OPERATIONS).toHaveLength(19);
   });
 
   for (const op of expectedOps) {
