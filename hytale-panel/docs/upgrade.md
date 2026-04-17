@@ -189,7 +189,7 @@ For major version upgrades with breaking changes:
 6. **Update .env** with any new required variables
 7. **Run the upgrade script**:
    ```bash
-   bash scripts/upgrade-panel.sh
+   bash deploy/update-panel.sh
    ```
 8. **Verify** all services are running correctly
 9. **Test** key functionality: login, dashboard, console, backups
