@@ -298,7 +298,7 @@ package "Helper (packages/helper)" #3a2a4a {
     class InputSanitizer {
         +{static} sanitizeConsoleCommand(cmd: string): string
         +{static} validateFilename(name: string): boolean
-        +{static} stripAnsiCodes(text: string): string
+        +{static} stripAnsi(str: string): string
     }
 
     class HmacAuth {
