@@ -429,9 +429,9 @@ check_services() {
   g="$(helper_unit_value Group)"
   sg="$(helper_unit_value SupplementaryGroups)"
   np="$(helper_unit_value NoNewPrivileges | tr '[:upper:]' '[:lower:]')"
-  if [ "$u" = "root" ] && [ "$g" = "hytale-panel" ] && printf '%s' "$sg" | grep -qw hytale && [ "$np" = "no" ]; then
+  if [ "$u" = "root" ] && [ "$g" = "hytale-panel" ] && printf '%s' "$sg" | grep -qw hytale && [ "$np" = "yes" ]; then
     HELPER_UNIT_CONFIG_OK=1
-    ok "Helper unit matches shipped model (root / hytale-panel / supp=hytale / NoNewPrivileges=false)"
+    ok "Helper unit matches shipped model (root / hytale-panel / supp=hytale / NoNewPrivileges=true)"
   else
     fail "Helper unit drift: user=$u group=$g supp=$sg NNP=$np" "sudo cp systemd/hytale-helper.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart hytale-helper.service"
   fi
