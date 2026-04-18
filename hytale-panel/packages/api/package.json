@@ -17,7 +17,7 @@
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/websocket": "^10.0.0",
     "argon2": "^0.40.0",
-    "drizzle-orm": "^0.33.0",
+    "drizzle-orm": "^0.45.2",
     "fastify": "^4.28.0",
     "fastify-plugin": "^4.5.0",
     "node-cron": "^3.0.3",
