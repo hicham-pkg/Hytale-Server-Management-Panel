@@ -2,11 +2,38 @@ import { eq, lt, or } from 'drizzle-orm';
 import * as OTPAuth from 'otpauth';
 import * as QRCode from 'qrcode';
 import { getDb, schema } from '../db';
-import { verifyPassword, generateUuid } from '../utils/crypto';
+import { verifyPassword, hashPassword, generateUuid } from '../utils/crypto';
 import { getConfig } from '../config';
 import type { User } from '@hytale-panel/shared';
 
 const { users, sessions } = schema;
+
+const TOTP_PERIOD_SECONDS = 30;
+
+// Lazy-cached placeholder Argon2 hash so that failed lookups and locked
+// accounts spend roughly the same CPU as a real password verification,
+// preventing username enumeration via response timing (H3).
+let _placeholderHashPromise: Promise<string> | null = null;
+function getPlaceholderHash(): Promise<string> {
+  if (!_placeholderHashPromise) {
+    _placeholderHashPromise = hashPassword(
+      'placeholder-for-constant-time-compare:' + generateUuid()
+    );
+  }
+  return _placeholderHashPromise;
+}
+
+async function burnPasswordTime(password: string): Promise<void> {
+  try {
+    await verifyPassword(await getPlaceholderHash(), password);
+  } catch {
+    // ignore — only the CPU cost matters
+  }
+}
+
+function currentTotpStep(now: Date = new Date()): number {
+  return Math.floor(now.getTime() / 1000 / TOTP_PERIOD_SECONDS);
+}
 
 type SessionUser = Pick<User, 'id' | 'username' | 'role' | 'totpEnabled'>;
 
@@ -146,18 +173,17 @@ export async function login(
   const [user] = await db.select().from(users).where(eq(users.username, username)).limit(1);
 
   if (!user) {
+    // Burn roughly equivalent CPU to a real Argon2 verify so response
+    // timing does not reveal whether the username exists (H3).
+    await burnPasswordTime(password);
     return { success: false, requires2fa: false, error: 'Invalid credentials' };
   }
 
-  // Check account lockout
+  // Check account lockout. Return the generic message so a locked account
+  // is indistinguishable from a wrong password (M10).
   if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
-    const remainingMs = new Date(user.lockedUntil).getTime() - Date.now();
-    const remainingMin = Math.ceil(remainingMs / 60_000);
-    return {
-      success: false,
-      requires2fa: false,
-      error: `Account locked. Try again in ${remainingMin} minute(s).`,
-    };
+    await burnPasswordTime(password);
+    return { success: false, requires2fa: false, error: 'Invalid credentials' };
   }
 
   const passwordValid = await verifyPassword(user.passwordHash, password);
@@ -261,7 +287,7 @@ export async function verifyTotp(sessionId: string, code: string): Promise<Login
     label: user.username,
     algorithm: 'SHA1',
     digits: 6,
-    period: 30,
+    period: TOTP_PERIOD_SECONDS,
     secret: OTPAuth.Secret.fromBase32(user.totpSecret),
   });
 
@@ -270,18 +296,42 @@ export async function verifyTotp(sessionId: string, code: string): Promise<Login
     return { success: false, requires2fa: true, error: 'Invalid TOTP code' };
   }
 
-  const nextExpiry = getSlidingExpiry(user.role as User['role'], createdAt, now);
+  // Reject replay of a previously-consumed TOTP step (H1). The counter is
+  // the absolute 30-second step index that the code hashed against, which
+  // is monotonic across codes, so any step <= the stored high-water mark
+  // has already been accepted (either as this code or a later one).
+  const submittedStep = currentTotpStep(now) + delta;
+  if (submittedStep <= user.lastTotpCounter) {
+    return { success: false, requires2fa: true, error: 'Invalid TOTP code' };
+  }
 
-  // Mark session as fully authenticated
-  await db
-    .update(sessions)
-    .set({ pending2fa: false, expiresAt: nextExpiry })
-    .where(eq(sessions.id, sessionId));
+  const nextExpiry = getSlidingExpiry(user.role as User['role'], createdAt, now);
+  const newSessionId = generateUuid();
+
+  // Rotate the session UUID atomically with recording the consumed TOTP
+  // step (H2). Insert-new then delete-old keeps the row-level foreign
+  // keys from audit_logs / backup_metadata valid at all times.
+  await db.transaction(async (tx) => {
+    await tx.insert(sessions).values({
+      id: newSessionId,
+      userId: session.userId,
+      ipAddress: session.ipAddress,
+      userAgent: session.userAgent,
+      pending2fa: false,
+      expiresAt: nextExpiry,
+      createdAt: session.createdAt,
+    });
+    await tx.delete(sessions).where(eq(sessions.id, sessionId));
+    await tx
+      .update(users)
+      .set({ lastTotpCounter: submittedStep, updatedAt: new Date() })
+      .where(eq(users.id, user.id));
+  });
 
   return {
     success: true,
     requires2fa: false,
-    sessionId,
+    sessionId: newSessionId,
     user: toSessionUser(user),
     cookieMaxAgeSeconds: getRemainingLifetimeSeconds(nextExpiry, now),
   };
@@ -376,36 +426,96 @@ export async function confirmTotp(
     label: user.username,
     algorithm: 'SHA1',
     digits: 6,
-    period: 30,
+    period: TOTP_PERIOD_SECONDS,
     secret: OTPAuth.Secret.fromBase32(user.totpSecret),
   });
 
   const delta = totp.validate({ token: code, window: 1 });
   if (delta === null) return { success: false };
 
-  await db
-    .update(users)
-    .set({ totpEnabled: true, updatedAt: new Date() })
-    .where(eq(users.id, userId));
+  const now = new Date();
+  const submittedStep = currentTotpStep(now) + delta;
+  if (submittedStep <= user.lastTotpCounter) {
+    return { success: false };
+  }
 
   if (!sessionId) {
+    await db
+      .update(users)
+      .set({
+        totpEnabled: true,
+        lastTotpCounter: submittedStep,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
     return { success: true };
   }
 
-  const context = await getSessionContext(sessionId);
-  if (!context || context.user.id !== userId) {
+  // Read the session row once up front and validate it here, rather than
+  // routing through getSessionContext which performs its own user lookup
+  // and sliding-window update that we would have to undo/redo inside the
+  // rotation transaction.
+  const [session] = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+
+  if (!session || session.userId !== userId) {
+    await db
+      .update(users)
+      .set({
+        totpEnabled: true,
+        lastTotpCounter: submittedStep,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
     return { success: true };
   }
 
-  await db
-    .update(sessions)
-    .set({ pending2fa: false, expiresAt: context.session.expiresAt })
-    .where(eq(sessions.id, sessionId));
+  const createdAt = new Date(session.createdAt);
+  const expiresAt = new Date(session.expiresAt);
+  if (expiresAt <= now || getAbsoluteExpiry(createdAt) <= now) {
+    await deleteSession(sessionId);
+    await db
+      .update(users)
+      .set({
+        totpEnabled: true,
+        lastTotpCounter: submittedStep,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+    return { success: true };
+  }
+
+  const nextExpiry = getSlidingExpiry(user.role as User['role'], createdAt, now);
+  const newSessionId = generateUuid();
+
+  await db.transaction(async (tx) => {
+    await tx.insert(sessions).values({
+      id: newSessionId,
+      userId: session.userId,
+      ipAddress: session.ipAddress,
+      userAgent: session.userAgent,
+      pending2fa: false,
+      expiresAt: nextExpiry,
+      createdAt: session.createdAt,
+    });
+    await tx.delete(sessions).where(eq(sessions.id, sessionId));
+    await tx
+      .update(users)
+      .set({
+        totpEnabled: true,
+        lastTotpCounter: submittedStep,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+  });
 
   return {
     success: true,
-    user: { ...context.user, totpEnabled: true },
-    sessionId,
-    cookieMaxAgeSeconds: context.cookieMaxAgeSeconds,
+    user: { ...toSessionUser(user), totpEnabled: true },
+    sessionId: newSessionId,
+    cookieMaxAgeSeconds: getRemainingLifetimeSeconds(nextExpiry, now),
   };
 }

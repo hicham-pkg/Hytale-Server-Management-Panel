@@ -103,13 +103,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(401).send({ success: false, error: result.error });
     }
 
-    setSessionCookie(reply, sessionId, result.cookieMaxAgeSeconds!);
+    // verifyTotp rotates the session UUID, so the new sessionId must drive
+    // both the cookie reset and the CSRF token bound to that session.
+    const newSessionId = result.sessionId!;
+    setSessionCookie(reply, newSessionId, result.cookieMaxAgeSeconds!);
 
     return reply.send({
       success: true,
       data: {
         user: result.user,
-        csrfToken: (request as any).csrfToken,
+        csrfToken: generateCsrfToken(config.csrfSecret, newSessionId),
       },
     });
   });
@@ -165,7 +168,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: {
           user: result.user,
-          csrfToken: (request as any).csrfToken,
+          csrfToken: generateCsrfToken(config.csrfSecret, result.sessionId),
         },
       });
     }

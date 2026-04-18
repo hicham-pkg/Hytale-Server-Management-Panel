@@ -9,6 +9,7 @@ export const users = pgTable('users', {
   totpEnabled: boolean('totp_enabled').default(false).notNull(),
   failedLoginAttempts: integer('failed_login_attempts').default(0).notNull(),
   lockedUntil: timestamp('locked_until', { withTimezone: true }),
+  lastTotpCounter: bigint('last_totp_counter', { mode: 'number' }).default(0).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
