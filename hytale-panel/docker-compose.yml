@@ -36,6 +36,22 @@ services:
       retries: 5
     # PostgreSQL is never exposed to the public internet.
     # It is only published on 127.0.0.1 for local maintenance tasks.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    cap_drop:
+      - ALL
+    cap_add:
+      # Minimum capabilities the postgres entrypoint needs to chown the
+      # data directory and drop from root to the postgres user on startup.
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
 
   # ─── Fastify API Server ───────────────────────────────────
   api:
