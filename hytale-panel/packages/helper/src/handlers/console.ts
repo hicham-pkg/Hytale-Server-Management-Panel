@@ -28,7 +28,8 @@ export async function sendCommand(
   ]);
 
   if (result.exitCode !== 0) {
-    return { success: false, message: `Failed to send command: ${result.stderr.slice(0, 200)}` };
+    console.error('[helper/console] send-keys stderr:', result.stderr);
+    return { success: false, message: 'Console command send failed' };
   }
 
   return { success: true, message: `Command sent: ${sanitized}` };
@@ -59,7 +60,8 @@ export async function capturePane(
   ]);
 
   if (result.exitCode !== 0) {
-    return { success: false, lines: [], error: `Capture failed: ${result.stderr.slice(0, 200)}` };
+    console.error('[helper/console] capture-pane stderr:', result.stderr);
+    return { success: false, lines: [], error: 'Console capture failed' };
   }
 
   const outputLines = stripAnsi(result.stdout)

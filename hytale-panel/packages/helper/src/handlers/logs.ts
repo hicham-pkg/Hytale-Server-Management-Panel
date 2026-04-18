@@ -32,7 +32,8 @@ export async function readLogs(
   const result = await runAllowlistedCommand('/usr/bin/journalctl', args);
 
   if (result.exitCode !== 0 && !result.stdout) {
-    return { success: false, lines: [], error: `journalctl failed: ${result.stderr.slice(0, 200)}` };
+    console.error('[helper/logs] journalctl stderr:', result.stderr);
+    return { success: false, lines: [], error: 'Log read failed' };
   }
 
   const logLines = stripAnsi(result.stdout)

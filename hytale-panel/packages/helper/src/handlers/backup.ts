@@ -9,6 +9,17 @@ import { getServerStatus } from './server-control';
 import { BACKUP_FILENAME_REGEX, UUID_REGEX } from '@hytale-panel/shared';
 import type { HelperConfig } from '../config';
 
+// M2: normalize error messages returned across the RPC boundary so they
+// never leak host filesystem paths or raw errno details. The full error
+// is still logged on the helper side for operators.
+function normalizeError(err: unknown, fallback: string): string {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  if (code === 'ENOENT') return 'Resource not found';
+  if (code === 'EACCES' || code === 'EPERM') return 'Operation denied';
+  console.error('[helper/backup]', err);
+  return fallback;
+}
+
 export interface BackupInfo {
   id: string;
   filename: string;
@@ -94,7 +105,8 @@ export async function createBackup(
     ], { timeout: 300_000 }); // 5 minute timeout for large worlds
 
     if (result.exitCode !== 0) {
-      return { success: false, error: `Backup creation failed: ${result.stderr.slice(0, 200)}` };
+      console.error('[helper/backup] tar create stderr:', result.stderr);
+      return { success: false, error: 'Backup operation failed' };
     }
 
     const sha256 = await computeFileSha256(backupFilePath);
@@ -112,7 +124,7 @@ export async function createBackup(
       },
     };
   } catch (err) {
-    return { success: false, error: `Backup error: ${String(err).slice(0, 200)}` };
+    return { success: false, error: normalizeError(err, 'Backup operation failed') };
   }
 }
 
@@ -145,7 +157,7 @@ export async function listBackups(
     backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return { success: true, backups };
   } catch (err) {
-    return { success: false, backups: [], error: `List backups error: ${String(err).slice(0, 200)}` };
+    return { success: false, backups: [], error: normalizeError(err, 'Backup list failed') };
   }
 }
 
@@ -207,8 +219,20 @@ export async function restoreBackup(
       return { success: false, error: typeValidation.error };
     }
 
-    // Create safety snapshot before restore
+    // Create safety snapshot before restore. M5: if the safety backup
+    // fails we must NOT proceed — the subsequent rm -rf on worlds/ would
+    // otherwise cause unrecoverable data loss. Abort with a clear error.
     const safetyResult = await createBackup(config, 'safety-pre-restore');
+    if (!safetyResult.success) {
+      console.error(
+        '[helper/backup] safety-pre-restore backup failed; aborting restore:',
+        safetyResult.error
+      );
+      return {
+        success: false,
+        error: 'Pre-restore safety backup failed; aborting restore to prevent data loss',
+      };
+    }
     const safetyBackupName = safetyResult.backup?.filename;
 
     // Remove current worlds directory
@@ -229,12 +253,13 @@ export async function restoreBackup(
     ], { timeout: 300_000 });
 
     if (extractResult.exitCode !== 0) {
-      return { success: false, error: `Restore failed: ${extractResult.stderr.slice(0, 200)}` };
+      console.error('[helper/backup] tar extract stderr:', extractResult.stderr);
+      return { success: false, error: 'Backup operation failed' };
     }
 
     return { success: true, safetyBackup: safetyBackupName };
   } catch (err) {
-    return { success: false, error: `Restore error: ${String(err).slice(0, 200)}` };
+    return { success: false, error: normalizeError(err, 'Backup operation failed') };
   }
 }
 
@@ -258,7 +283,7 @@ export async function deleteBackup(
     await fs.unlink(backupFilePath);
     return { success: true };
   } catch (err) {
-    return { success: false, error: `Delete error: ${String(err).slice(0, 200)}` };
+    return { success: false, error: normalizeError(err, 'Backup operation failed') };
   }
 }
 
@@ -289,6 +314,6 @@ export async function hashBackup(
     const sha256 = await computeFileSha256(backupFilePath);
     return { success: true, sha256 };
   } catch (err) {
-    return { success: false, error: `Hash error: ${String(err).slice(0, 200)}` };
+    return { success: false, error: normalizeError(err, 'Backup operation failed') };
   }
 }

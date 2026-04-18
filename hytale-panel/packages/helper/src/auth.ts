@@ -4,6 +4,12 @@ import type { HelperConfig } from './config';
 
 const HMAC_HEX_LENGTH = 64; // SHA-256 produces 32 bytes = 64 hex chars
 
+// Hard cap on the in-memory nonce cache. A sustained burst of distinct
+// nonces between sweep cycles (every 60s) could otherwise grow the Map
+// unboundedly. At 10k entries the cache holds roughly 1 MB and matches
+// expected legitimate traffic volumes with comfortable headroom (H5).
+const MAX_NONCES = 10_000;
+
 const usedNonces = new Map<string, number>();
 
 /** Clean up expired nonces every 60 seconds */
@@ -57,6 +63,13 @@ export function validateRequest(
   // Guard: both should be 32 bytes, but check defensively
   if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
     return { valid: false, error: 'Invalid HMAC signature' };
+  }
+
+  // Only record the nonce AFTER signature verification so we don't let an
+  // unauthenticated client poison the cache. The size check gates before
+  // insertion to bound memory growth under a flood (H5).
+  if (usedNonces.size >= MAX_NONCES) {
+    return { valid: false, error: 'Nonce cache full; request rejected' };
   }
 
   usedNonces.set(nonce, Date.now());

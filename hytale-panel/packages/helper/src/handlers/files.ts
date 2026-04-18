@@ -7,6 +7,16 @@ import type { HelperConfig } from '../config';
 
 const MAX_CONFIG_FILE_BYTES = 10 * 1024 * 1024;
 
+// M2: keep raw errno / filesystem paths out of RPC responses. Full error
+// is still written to the helper log for operators.
+function normalizeError(err: unknown, fallback: string): string {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  if (code === 'ENOENT') return 'Resource not found';
+  if (code === 'EACCES' || code === 'EPERM') return 'Operation denied';
+  console.error('[helper/files]', err);
+  return fallback;
+}
+
 async function assertFileWithinSizeLimit(safePath: string, label: string): Promise<string | null> {
   const stat = await fs.stat(safePath);
   if (stat.size > MAX_CONFIG_FILE_BYTES) {
@@ -71,7 +81,7 @@ export async function readWhitelist(
       list: Array.isArray(parsed.list) ? parsed.list : [],
     };
   } catch (err) {
-    return { success: false, enabled: false, list: [], error: `Failed to read whitelist: ${String(err).slice(0, 200)}` };
+    return { success: false, enabled: false, list: [], error: normalizeError(err, 'Whitelist read failed') };
   }
 }
 
@@ -90,7 +100,7 @@ export async function writeWhitelist(
     await atomicWriteFile(safePath, content);
     return { success: true };
   } catch (err) {
-    return { success: false, error: `Failed to write whitelist: ${String(err).slice(0, 200)}` };
+    return { success: false, error: normalizeError(err, 'Whitelist write failed') };
   }
 }
 
@@ -123,7 +133,7 @@ export async function readBans(
     const validated = BanFileSchema.parse(parsed);
     return { success: true, entries: validated };
   } catch (err) {
-    return { success: false, entries: [], error: `Failed to read bans: ${String(err).slice(0, 200)}` };
+    return { success: false, entries: [], error: normalizeError(err, 'Bans read failed') };
   }
 }
 
@@ -141,6 +151,6 @@ export async function writeBans(
     await atomicWriteFile(safePath, content);
     return { success: true };
   } catch (err) {
-    return { success: false, error: `Failed to write bans: ${String(err).slice(0, 200)}` };
+    return { success: false, error: normalizeError(err, 'Bans write failed') };
   }
 }

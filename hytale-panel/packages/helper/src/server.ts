@@ -1,7 +1,13 @@
 import Fastify from 'fastify';
 import * as fs from 'fs';
 import { z } from 'zod';
-import { HELPER_OPERATIONS } from '@hytale-panel/shared';
+import {
+  HELPER_OPERATIONS,
+  BACKUP_FILENAME_REGEX,
+  BACKUP_LABEL_REGEX,
+  COMMAND_CHAR_ALLOWLIST,
+  MAX_COMMAND_LENGTH,
+} from '@hytale-panel/shared';
 import type { HelperOperation } from '@hytale-panel/shared';
 import { validateRequest } from './auth';
 import { loadConfig, type HelperConfig } from './config';
@@ -11,6 +17,11 @@ import { readLogs } from './handlers/logs';
 import { readWhitelist, writeWhitelist, readBans, writeBans } from './handlers/files';
 import { createBackup, listBackups, restoreBackup, deleteBackup, hashBackup } from './handlers/backup';
 import { getSystemStats, getProcessStats } from './handlers/stats';
+
+// Cap on the total /rpc request body. All legitimate helper payloads fit
+// well under 64 KiB — even a full whitelist of 1000 UUIDs is ~40 KiB
+// (H6). Fastify rejects oversize bodies before parsing.
+const MAX_BODY_BYTES = 64 * 1024;
 
 const RequestSchema = z.object({
   operation: z.enum(HELPER_OPERATIONS),
@@ -39,6 +50,7 @@ export async function createHelperServer() {
   }
 
   const fastify = Fastify({
+    bodyLimit: MAX_BODY_BYTES,
     logger: {
       level: 'info',
       // Use plain JSON logging — no pino-pretty dependency needed in production.
@@ -126,13 +138,17 @@ async function executeOperation(
       return { success: true, data: result };
     }
     case 'server.sendCommand': {
-      const command = z.string().parse(params.command);
+      const command = z
+        .string()
+        .max(MAX_COMMAND_LENGTH)
+        .regex(COMMAND_CHAR_ALLOWLIST)
+        .parse(params.command);
       const result = await sendCommand(config, command);
       return { success: result.success, data: result, error: result.success ? undefined : result.message };
     }
     case 'logs.read': {
       const lines = z.number().int().min(1).max(1000).parse(params.lines ?? 100);
-      const since = params.since ? z.string().parse(params.since) : undefined;
+      const since = params.since ? z.string().max(64).parse(params.since) : undefined;
       const result = await readLogs(config, lines, since);
       return { success: result.success, data: { lines: result.lines }, error: result.error };
     }
@@ -147,7 +163,7 @@ async function executeOperation(
     }
     case 'whitelist.write': {
       const enabled = z.boolean().parse(params.enabled ?? false);
-      const list = z.array(z.string()).parse(params.list ?? []);
+      const list = z.array(z.string().max(64)).max(1000).parse(params.list ?? []);
       const result = await writeWhitelist(config, enabled, list);
       return { success: result.success, error: result.error };
     }
@@ -156,16 +172,23 @@ async function executeOperation(
       return { success: result.success, data: { entries: result.entries }, error: result.error };
     }
     case 'bans.write': {
-      const entries = z.array(z.object({
-        name: z.string(),
-        reason: z.string().optional(),
-        bannedAt: z.string().optional(),
-      })).parse(params.entries);
+      const entries = z
+        .array(
+          z.object({
+            name: z.string().max(64),
+            reason: z.string().max(500).optional(),
+            bannedAt: z.string().max(64).optional(),
+          })
+        )
+        .max(1000)
+        .parse(params.entries);
       const result = await writeBans(config, entries);
       return { success: result.success, error: result.error };
     }
     case 'backup.create': {
-      const label = params.label ? z.string().parse(params.label) : undefined;
+      const label = params.label
+        ? z.string().regex(BACKUP_LABEL_REGEX).parse(params.label)
+        : undefined;
       const result = await createBackup(config, label);
       return { success: result.success, data: result.backup, error: result.error };
     }
@@ -174,17 +197,17 @@ async function executeOperation(
       return { success: result.success, data: { backups: result.backups }, error: result.error };
     }
     case 'backup.restore': {
-      const filename = z.string().parse(params.filename);
+      const filename = z.string().regex(BACKUP_FILENAME_REGEX).parse(params.filename);
       const result = await restoreBackup(config, filename);
       return { success: result.success, data: { safetyBackup: result.safetyBackup }, error: result.error };
     }
     case 'backup.delete': {
-      const filename = z.string().parse(params.filename);
+      const filename = z.string().regex(BACKUP_FILENAME_REGEX).parse(params.filename);
       const result = await deleteBackup(config, filename);
       return { success: result.success, error: result.error };
     }
     case 'backup.hash': {
-      const filename = z.string().parse(params.filename);
+      const filename = z.string().regex(BACKUP_FILENAME_REGEX).parse(params.filename);
       const result = await hashBackup(config, filename);
       return { success: result.success, data: { sha256: result.sha256 }, error: result.error };
     }
