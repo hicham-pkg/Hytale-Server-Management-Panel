@@ -21,7 +21,7 @@ services:
     environment:
       POSTGRES_DB: hytale_panel
       POSTGRES_USER: hytale_panel
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env (run install.sh or set manually)}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -48,7 +48,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://hytale_panel:${DB_PASSWORD:-changeme}@postgres:5432/hytale_panel
+      DATABASE_URL: postgresql://hytale_panel:${DB_PASSWORD:?DB_PASSWORD must be set in .env (run install.sh or set manually)}@postgres:5432/hytale_panel
       API_HOST: "0.0.0.0"
       API_PORT: "4000"
       NODE_ENV: ${NODE_ENV:-production}

@@ -699,13 +699,17 @@ check_config() {
   section "CONFIG"
 
   if [ -f "$ROOT_ENV_FILE" ]; then
-    local mode
+    local mode owner
     mode="$(stat_mode "$ROOT_ENV_FILE")"
-    if [ "$mode" = "600" ]; then
+    owner="$(stat_owner "$ROOT_ENV_FILE")"
+    if [ "$mode" = "600" ] && [ "$owner" = "root:root" ]; then
       ROOT_ENV_PERMS_OK=1
-      ok "Root .env exists (mode 600)"
+      ok "Root .env exists (mode 600, root:root)"
     else
-      fail "Root .env mode is $mode, expected 600" "sudo chmod 600 $ROOT_ENV_FILE"
+      # SECURITY: .env holds SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD.
+      # Anything broader than 0600 root:root leaks the helper HMAC to local users,
+      # who can then forge RPC against the root-owned helper socket.
+      fail "Root .env has mode=$mode owner=$owner, expected 600 root:root" "sudo chown root:root $ROOT_ENV_FILE && sudo chmod 600 $ROOT_ENV_FILE"
     fi
   else
     fail "Root .env missing at $ROOT_ENV_FILE" "sudo ./install.sh"
@@ -990,8 +994,8 @@ perform_fixes() {
   fi
 
   if [ "$ROOT_ENV_PERMS_OK" -eq 0 ] && [ -f "$ROOT_ENV_FILE" ]; then
-    if sudo chmod 600 "$ROOT_ENV_FILE"; then
-      printf '  %s✓%s set $ROOT_ENV_FILE mode to 600\n' "$COLOR_GREEN" "$COLOR_RESET"
+    if sudo chown root:root "$ROOT_ENV_FILE" && sudo chmod 600 "$ROOT_ENV_FILE"; then
+      printf '  %s✓%s reset %s to 600 root:root\n' "$COLOR_GREEN" "$COLOR_RESET" "$ROOT_ENV_FILE"
       repairs=$((repairs + 1))
     fi
   fi

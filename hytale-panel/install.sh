@@ -703,6 +703,12 @@ fi
 
 set_env_var "$PANEL_DIR/.env" PANEL_SOCKET_GID "$PANEL_SOCKET_GID"
 
+# Lock down panel .env — contains SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD.
+# Install-time umask may leave it 0644 (world-readable); force 0600 so local users on the host
+# cannot read the helper HMAC secret and forge RPC against the root helper socket.
+chmod 600 "$PANEL_DIR/.env"
+chown root:root "$PANEL_DIR/.env"
+
 require_env_var "$PANEL_DIR/.env" DB_PASSWORD
 require_env_var "$PANEL_DIR/.env" SESSION_SECRET
 require_env_var "$PANEL_DIR/.env" CSRF_SECRET
