@@ -42,7 +42,7 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@types/pg@8.20.0)(pg@8.20.0)
       fastify:
-        specifier: ^4.28.0
+        specifier: ^4.29.1
         version: 4.29.1
       fastify-plugin:
         specifier: ^4.5.0
@@ -91,7 +91,7 @@ importers:
         specifier: workspace:*
         version: link:../shared
       fastify:
-        specifier: ^4.28.0
+        specifier: ^4.29.1
         version: 4.29.1
       zod:
         specifier: ^3.23.8
