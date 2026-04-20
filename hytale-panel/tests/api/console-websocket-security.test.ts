@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { WS_CAPTURE_POLL_INTERVAL_MS } from '@hytale-panel/shared';
 
 const getConfigMock = vi.fn();
 const validateSessionMock = vi.fn();
@@ -32,7 +33,7 @@ interface MockSocket {
   send: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
-  emit: (event: string, ...args: unknown[]) => void;
+  emit: (event: string, ...args: unknown[]) => Promise<void>;
 }
 
 function createMockSocket(): MockSocket {
@@ -47,9 +48,9 @@ function createMockSocket(): MockSocket {
       existing.push(handler);
       listeners.set(event, existing);
     }),
-    emit(event: string, ...args: unknown[]) {
+    async emit(event: string, ...args: unknown[]) {
       for (const handler of listeners.get(event) ?? []) {
-        handler(...args);
+        await handler(...args);
       }
     },
   };
@@ -83,6 +84,7 @@ async function loadWsHandler() {
 
 describe('Console WebSocket Security', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     getConfigMock.mockReset();
     validateSessionMock.mockReset();
     captureConsoleOutputMock.mockReset();
@@ -144,8 +146,79 @@ describe('Console WebSocket Security', () => {
     );
     expect(sockets[3].close).toHaveBeenCalledWith(4008, 'Connection limit exceeded');
 
-    sockets[0].emit('close');
-    sockets[1].emit('close');
-    sockets[2].emit('close');
+    await sockets[0].emit('close');
+    await sockets[1].emit('close');
+    await sockets[2].emit('close');
+  });
+
+  it('revalidates the session on command messages and closes expired sessions', async () => {
+    getConfigMock.mockReturnValue({
+      nodeEnv: 'production',
+      wsAllowedOrigins: 'https://panel.example.com',
+    });
+    validateSessionMock
+      .mockResolvedValueOnce({
+        valid: true,
+        user: { id: 'user-1', username: 'admin', role: 'admin' },
+      })
+      .mockResolvedValueOnce({
+        valid: false,
+      });
+
+    const { handler } = await loadWsHandler();
+    const socket = createMockSocket();
+
+    await handler(socket, {
+      headers: { origin: 'https://panel.example.com' },
+      cookies: { hytale_session: 'session-1' },
+      ip: '127.0.0.1',
+    });
+
+    await socket.emit('message', Buffer.from(JSON.stringify({ type: 'command', data: 'save' })));
+
+    expect(sendConsoleCommandMock).not.toHaveBeenCalled();
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'error', message: 'Session expired' }));
+    expect(socket.close).toHaveBeenCalledWith(4001, 'Unauthorized');
+  });
+
+  it('streams appended lines when the capture window stays at 200 lines', async () => {
+    vi.useFakeTimers();
+
+    getConfigMock.mockReturnValue({
+      nodeEnv: 'production',
+      wsAllowedOrigins: 'https://panel.example.com',
+    });
+    validateSessionMock.mockResolvedValue({
+      valid: true,
+      user: { id: 'user-1', username: 'admin', role: 'admin' },
+    });
+
+    const initialLines = Array.from({ length: 200 }, (_, i) => `line-${i + 1}`);
+    const shiftedLines = [...initialLines.slice(1), 'line-201'];
+
+    captureConsoleOutputMock
+      .mockResolvedValueOnce({ success: true, lines: initialLines })
+      .mockResolvedValueOnce({ success: true, lines: shiftedLines });
+
+    const { handler } = await loadWsHandler();
+    const socket = createMockSocket();
+
+    await handler(socket, {
+      headers: { origin: 'https://panel.example.com' },
+      cookies: { hytale_session: 'session-1' },
+      ip: '127.0.0.1',
+    });
+
+    await socket.emit('message', Buffer.from(JSON.stringify({ type: 'subscribe' })));
+    await vi.advanceTimersByTimeAsync(WS_CAPTURE_POLL_INTERVAL_MS);
+
+    const logMessages = socket.send.mock.calls
+      .map(([payload]) => JSON.parse(payload))
+      .filter((payload) => payload.type === 'log');
+
+    expect(logMessages[0]?.lines).toEqual(initialLines);
+    expect(logMessages[1]?.lines).toEqual(['line-201']);
+
+    await socket.emit('close');
   });
 });

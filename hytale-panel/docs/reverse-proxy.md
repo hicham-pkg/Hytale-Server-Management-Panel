@@ -4,6 +4,8 @@ The panel API binds to `127.0.0.1:4000` and **must not** be exposed directly to 
 
 For first-run private testing, you can skip the reverse proxy entirely and SSH-tunnel the localhost-bound web port to your workstation.
 
+Backup create/restore endpoints are long-running by design. For any proxy (nginx, Caddy, Cloudflare Tunnel), keep upstream `/api/` timeouts at or above `900s` to avoid client/proxy timeout drift during restore operations.
+
 ## Table of Contents
 
 1. [Nginx](#nginx)
@@ -103,8 +105,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 300s;
+        proxy_send_timeout 900s;
+        proxy_read_timeout 900s;
     }
 
     location / {
@@ -122,6 +124,8 @@ server {
     }
 }
 ```
+
+`/api/backups/create` and especially `/api/backups/:id/restore` can run for several minutes on large worlds. Keep upstream `/api/` read/send timeouts at or above `900s` to avoid proxy timeouts while the helper is still working.
 
 ### Enable and Get Certificate
 

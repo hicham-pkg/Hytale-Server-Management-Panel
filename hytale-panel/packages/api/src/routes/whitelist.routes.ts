@@ -10,22 +10,43 @@ import * as serverService from '../services/server.service';
 import { logAudit } from '../services/audit.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
+import { isHelperUnavailableError } from '../services/helper-client';
 
 export async function whitelistRoutes(fastify: FastifyInstance): Promise<void> {
+  const sendHelperDegraded = (reply: { status: (code: number) => { send: (payload: unknown) => unknown } }, err: unknown) =>
+    reply
+      .status(isHelperUnavailableError(err) ? 503 : 502)
+      .send({
+        success: false,
+        error: isHelperUnavailableError(err)
+          ? 'Helper service unavailable'
+          : (err as Error).message || 'Unable to determine server state',
+        data: {
+          message: 'Unable to verify live server state',
+          degraded: true,
+          dependency: 'helper',
+        },
+      });
+
   fastify.get(
     '/api/whitelist',
     { preHandler: [requireAuth] },
     async (_request, reply) => {
-      const result = await whitelistService.getWhitelist();
-      const status = await serverService.getServerStatus();
-      return reply.send({
-        success: result.success,
-        data: {
-          enabled: result.enabled,
-          list: result.list,
-          serverRunning: status.running,
-        },
-      });
+      try {
+        const result = await whitelistService.getWhitelist();
+        const status = await serverService.getServerStatus({ strict: true });
+        return reply.send({
+          success: result.success,
+          data: {
+            enabled: result.enabled,
+            list: result.list,
+            serverRunning: status.running,
+          },
+          error: result.success ? undefined : result.error,
+        });
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
     }
   );
 
@@ -38,8 +59,13 @@ export async function whitelistRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const body = AddPlayerSchema.parse(request.body);
-      const status = await serverService.getServerStatus();
-      const result = await whitelistService.addPlayer(body.name, status.running);
+      let result;
+      try {
+        const status = await serverService.getServerStatus({ strict: true });
+        result = await whitelistService.addPlayer(body.name, status.running);
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,
@@ -62,8 +88,13 @@ export async function whitelistRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const body = RemovePlayerSchema.parse(request.body);
-      const status = await serverService.getServerStatus();
-      const result = await whitelistService.removePlayerOnline(body.name, status.running);
+      let result;
+      try {
+        const status = await serverService.getServerStatus({ strict: true });
+        result = await whitelistService.removePlayerOnline(body.name, status.running);
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,
@@ -87,8 +118,13 @@ export async function whitelistRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const body = RemovePlayerByUuidSchema.parse(request.body);
-      const status = await serverService.getServerStatus();
-      const result = await whitelistService.removePlayerOffline(body.uuid, status.running);
+      let result;
+      try {
+        const status = await serverService.getServerStatus({ strict: true });
+        result = await whitelistService.removePlayerOffline(body.uuid, status.running);
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,
@@ -108,8 +144,13 @@ export async function whitelistRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const body = ToggleWhitelistSchema.parse(request.body);
-      const status = await serverService.getServerStatus();
-      const result = await whitelistService.toggleWhitelist(body.enabled, status.running);
+      let result;
+      try {
+        const status = await serverService.getServerStatus({ strict: true });
+        result = await whitelistService.toggleWhitelist(body.enabled, status.running);
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,

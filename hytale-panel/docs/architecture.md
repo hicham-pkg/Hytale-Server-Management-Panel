@@ -439,9 +439,9 @@ The helper service provides a clean, auditable, validatable boundary between the
 | `logs.read` | `lines: number, since?: string` | lines ≤ 1000; since must be valid ISO date |
 | `console.capturePane` | `lines: number` | lines ≤ 500 |
 | `whitelist.read` | none | Read-only |
-| `whitelist.write` | `content: WhitelistEntry[]` | Zod-validated JSON array |
+| `whitelist.write` | `enabled: boolean, list: string[]` | Zod-validated whitelist object fields |
 | `bans.read` | none | Read-only |
-| `bans.write` | `content: BanEntry[]` | Zod-validated JSON array |
+| `bans.write` | `entries: BanEntry[]` | Zod-validated JSON array |
 | `backup.create` | `label?: string` | Label alphanumeric+dash, max 50 chars |
 | `backup.list` | none | Read-only |
 | `backup.restore` | `backupId: string` | Server must be stopped; safety snapshot first |
@@ -815,7 +815,7 @@ type ServerMessage =
 5. **Single VPS** — no clustering or multi-node needed
 6. **Small admin team** — 1-3 users maximum
 7. **Hytale server** reads commands from stdin (like most game servers)
-8. **Whitelist** is stored in `/opt/hytale/Server/whitelist.json` as a JSON array
+8. **Whitelist** is stored in `/opt/hytale/Server/whitelist.json` as `{ "enabled": boolean, "list": string[] }`
 9. **Bans** are stored in `/opt/hytale/Server/bans.json` (if exists; graceful fallback)
 10. **Backups** are stored in `/opt/hytale-backups/` as tar.gz archives
 11. **No RCON** protocol available for Hytale (stdin/stdout via tmux is the approach)

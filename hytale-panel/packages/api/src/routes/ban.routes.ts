@@ -5,14 +5,34 @@ import * as serverService from '../services/server.service';
 import { logAudit } from '../services/audit.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
+import { isHelperUnavailableError } from '../services/helper-client';
 
 export async function banRoutes(fastify: FastifyInstance): Promise<void> {
+  const sendHelperDegraded = (reply: { status: (code: number) => { send: (payload: unknown) => unknown } }, err: unknown) =>
+    reply
+      .status(isHelperUnavailableError(err) ? 503 : 502)
+      .send({
+        success: false,
+        error: isHelperUnavailableError(err)
+          ? 'Helper service unavailable'
+          : (err as Error).message || 'Unable to determine server state',
+        data: {
+          message: 'Unable to verify live server state',
+          degraded: true,
+          dependency: 'helper',
+        },
+      });
+
   fastify.get(
     '/api/bans',
     { preHandler: [requireAuth] },
     async (_request, reply) => {
-      const result = await banService.getBans();
-      return reply.send({ success: result.success, data: { entries: result.entries } });
+      try {
+        const result = await banService.getBans();
+        return reply.send({ success: result.success, data: { entries: result.entries }, error: result.error });
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
     }
   );
 
@@ -21,8 +41,13 @@ export async function banRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const body = AddBanSchema.parse(request.body);
-      const status = await serverService.getServerStatus();
-      const result = await banService.addBan(body.name, body.reason ?? '', status.running);
+      let result;
+      try {
+        const status = await serverService.getServerStatus({ strict: true });
+        result = await banService.addBan(body.name, body.reason ?? '', status.running);
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,
@@ -42,8 +67,13 @@ export async function banRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const body = RemoveBanSchema.parse(request.body);
-      const status = await serverService.getServerStatus();
-      const result = await banService.removeBan(body.name, status.running);
+      let result;
+      try {
+        const status = await serverService.getServerStatus({ strict: true });
+        result = await banService.removeBan(body.name, status.running);
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,

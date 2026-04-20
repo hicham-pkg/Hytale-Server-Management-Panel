@@ -14,6 +14,7 @@ const dbState = vi.hoisted(() => ({
     createdBy: string | null;
     createdAt: Date;
   }>,
+  insertedRows: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('../../packages/api/src/services/helper-client', () => helperClientMock);
@@ -22,10 +23,18 @@ vi.mock('../../packages/api/src/db', () => ({
   getDb: () => ({
     select: () => ({
       from: () => ({
-        where: async () => dbState.rows,
+        where: () => ({
+          limit: async () => dbState.rows,
+          then: (resolve: (value: typeof dbState.rows) => unknown) => Promise.resolve(resolve(dbState.rows)),
+        }),
         orderBy: async () => dbState.rows,
         limit: async () => dbState.rows,
       }),
+    }),
+    insert: () => ({
+      values: async (row: Record<string, unknown>) => {
+        dbState.insertedRows.push(row);
+      },
     }),
   }),
   schema: {
@@ -47,6 +56,7 @@ describe('Backup service helper contract', () => {
   beforeEach(() => {
     helperClientMock.callHelper.mockReset();
     dbState.rows = [];
+    dbState.insertedRows = [];
   });
 
   it('accepts the helper backup.list payload shaped as { data: { backups: [...] } }', async () => {
@@ -76,19 +86,22 @@ describe('Backup service helper contract', () => {
     ];
 
     const { listBackups } = await import('../../packages/api/src/services/backup.service');
-    const backups = await listBackups();
+    const result = await listBackups();
 
-    expect(backups).toEqual([
-      {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        filename: '2026-03-25T10-00-00-000Z_world.tar.gz',
-        label: 'nightly',
-        sizeBytes: 1234,
-        sha256: 'abc123',
-        createdBy: '550e8400-e29b-41d4-a716-446655440001',
-        createdAt: '2026-03-25T10:00:00.000Z',
-      },
-    ]);
+    expect(result).toEqual({
+      helperOffline: false,
+      backups: [
+        {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          filename: '2026-03-25T10-00-00-000Z_world.tar.gz',
+          label: 'nightly',
+          sizeBytes: 1234,
+          sha256: 'abc123',
+          createdBy: '550e8400-e29b-41d4-a716-446655440001',
+          createdAt: '2026-03-25T10:00:00.000Z',
+        },
+      ],
+    });
   });
 
   it('remains backward-compatible with a legacy array payload', async () => {
@@ -104,18 +117,114 @@ describe('Backup service helper contract', () => {
     });
 
     const { listBackups } = await import('../../packages/api/src/services/backup.service');
-    const backups = await listBackups();
+    const result = await listBackups();
 
-    expect(backups).toEqual([
+    expect(result).toEqual({
+      helperOffline: false,
+      backups: [
+        {
+          id: '2026-03-24T10-00-00-000Z_world.tar.gz',
+          filename: '2026-03-24T10-00-00-000Z_world.tar.gz',
+          label: null,
+          sizeBytes: 4321,
+          sha256: '',
+          createdBy: null,
+          createdAt: '2026-03-24T10:00:00.000Z',
+        },
+      ],
+    });
+  });
+
+  it('falls back to DB metadata when helper transport fails during backup.list', async () => {
+    helperClientMock.callHelper.mockRejectedValue(new Error('socket hang up'));
+    dbState.rows = [
       {
-        id: '2026-03-24T10-00-00-000Z_world.tar.gz',
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        filename: '2026-03-25T10-00-00-000Z_world.tar.gz',
+        label: 'nightly',
+        sizeBytes: 1234,
+        sha256: 'abc123',
+        createdBy: '550e8400-e29b-41d4-a716-446655440001',
+        createdAt: new Date('2026-03-25T10:00:00.000Z'),
+      },
+    ];
+
+    const { listBackups } = await import('../../packages/api/src/services/backup.service');
+    const result = await listBackups();
+
+    expect(result).toEqual({
+      helperOffline: true,
+      backups: [
+        {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          filename: '2026-03-25T10-00-00-000Z_world.tar.gz',
+          label: 'nightly',
+          sizeBytes: 1234,
+          sha256: 'abc123',
+          createdBy: '550e8400-e29b-41d4-a716-446655440001',
+          createdAt: '2026-03-25T10:00:00.000Z',
+          helperOffline: true,
+        },
+      ],
+    });
+  });
+
+  it('uses an extended helper timeout for backup.create to match long-running tar operations', async () => {
+    helperClientMock.callHelper.mockResolvedValue({
+      success: true,
+      data: {
+        id: '550e8400-e29b-41d4-a716-446655440000',
         filename: '2026-03-24T10-00-00-000Z_world.tar.gz',
-        label: null,
         sizeBytes: 4321,
-        sha256: '',
-        createdBy: null,
+        sha256: 'abc123',
         createdAt: '2026-03-24T10:00:00.000Z',
       },
-    ]);
+    });
+
+    const { createBackup } = await import('../../packages/api/src/services/backup.service');
+    const result = await createBackup('nightly', '550e8400-e29b-41d4-a716-446655440001');
+
+    expect(result.success).toBe(true);
+    expect(helperClientMock.callHelper).toHaveBeenCalledWith(
+      'backup.create',
+      { label: 'nightly' },
+      { timeoutMs: 360000 }
+    );
+    expect(dbState.insertedRows).toHaveLength(1);
+  });
+
+  it('uses extended helper timeouts for backup.hash and backup.restore', async () => {
+    dbState.rows = [
+      {
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        filename: '2026-03-24T10-00-00-000Z_world.tar.gz',
+        label: 'nightly',
+        sizeBytes: 4321,
+        sha256: 'abc123',
+        createdBy: '550e8400-e29b-41d4-a716-446655440001',
+        createdAt: new Date('2026-03-24T10:00:00.000Z'),
+      },
+    ];
+
+    helperClientMock.callHelper
+      .mockResolvedValueOnce({ success: true, data: { sha256: 'abc123' } })
+      .mockResolvedValueOnce({ success: true, data: { safetyBackup: 'safety-pre-restore.tar.gz' } });
+
+    const { restoreBackup } = await import('../../packages/api/src/services/backup.service');
+    const result = await restoreBackup('550e8400-e29b-41d4-a716-446655440000');
+
+    expect(result).toEqual({ success: true, safetyBackup: 'safety-pre-restore.tar.gz' });
+    expect(helperClientMock.callHelper).toHaveBeenNthCalledWith(
+      1,
+      'backup.hash',
+      { filename: '2026-03-24T10-00-00-000Z_world.tar.gz' },
+      { timeoutMs: 360000 }
+    );
+    expect(helperClientMock.callHelper).toHaveBeenNthCalledWith(
+      2,
+      'backup.restore',
+      { filename: '2026-03-24T10-00-00-000Z_world.tar.gz' },
+      { timeoutMs: 720000 }
+    );
   });
 });

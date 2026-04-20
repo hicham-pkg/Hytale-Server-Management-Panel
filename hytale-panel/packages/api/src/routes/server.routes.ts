@@ -3,28 +3,32 @@ import * as serverService from '../services/server.service';
 import { logAudit } from '../services/audit.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
+import { isHelperUnavailableError } from '../services/helper-client';
 
 export async function serverRoutes(fastify: FastifyInstance): Promise<void> {
+  const sendHelperDegraded = (reply: { status: (code: number) => { send: (payload: unknown) => unknown } }, err: unknown) =>
+    reply
+      .status(isHelperUnavailableError(err) ? 503 : 502)
+      .send({
+        success: false,
+        error: isHelperUnavailableError(err)
+          ? 'Helper service unavailable'
+          : (err as Error).message || 'Helper request failed',
+        data: {
+          degraded: true,
+          dependency: 'helper',
+        },
+      });
+
   fastify.get(
     '/api/server/status',
     { preHandler: [requireAuth] },
     async (_request, reply) => {
       try {
-        const status = await serverService.getServerStatus();
+        const status = await serverService.getServerStatus({ strict: true });
         return reply.send({ success: true, data: status });
       } catch (err) {
-        return reply.send({
-          success: true,
-          data: {
-            running: false,
-            pid: null,
-            uptime: null,
-            lastRestart: null,
-            playerCount: null,
-            serviceName: 'hytale-tmux.service',
-            error: 'Helper service unavailable',
-          },
-        });
+        return sendHelperDegraded(reply, err);
       }
     }
   );
@@ -33,7 +37,12 @@ export async function serverRoutes(fastify: FastifyInstance): Promise<void> {
     '/api/server/start',
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
-      const result = await serverService.startServer();
+      let result;
+      try {
+        result = await serverService.startServer();
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,
@@ -57,7 +66,12 @@ export async function serverRoutes(fastify: FastifyInstance): Promise<void> {
     '/api/server/stop',
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
-      const result = await serverService.stopServer();
+      let result;
+      try {
+        result = await serverService.stopServer();
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,
@@ -81,7 +95,12 @@ export async function serverRoutes(fastify: FastifyInstance): Promise<void> {
     '/api/server/restart',
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
-      const result = await serverService.restartServer();
+      let result;
+      try {
+        result = await serverService.restartServer();
+      } catch (err) {
+        return sendHelperDegraded(reply, err);
+      }
 
       await logAudit({
         userId: request.currentUser!.id,

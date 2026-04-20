@@ -52,3 +52,5 @@ __pycache__
 *.tsbuildinfo
 .claude/
 uploads/
+CLAUDE.md
+AGENTS.md

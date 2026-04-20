@@ -21,9 +21,15 @@ interface BackupMeta {
   helperOffline?: boolean;
 }
 
+interface BackupsResponse {
+  backups: BackupMeta[];
+  helperOffline?: boolean;
+}
+
 export default function BackupsPage() {
   const { user } = useAuth();
   const [backups, setBackups] = useState<BackupMeta[]>([]);
+  const [helperOffline, setHelperOffline] = useState(false);
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -31,8 +37,16 @@ export default function BackupsPage() {
   const [message, setMessage] = useState('');
 
   const fetchBackups = async () => {
-    const res = await apiGet<{ backups: BackupMeta[] }>('/api/backups');
-    if (res.success && res.data) setBackups(res.data.backups);
+    const res = await apiGet<BackupsResponse>('/api/backups');
+    if (res.success && res.data) {
+      setBackups(res.data.backups);
+      setHelperOffline(res.data.helperOffline === true || res.data.backups.some((backup) => backup.helperOffline === true));
+      setError('');
+    } else {
+      setBackups([]);
+      setHelperOffline(res.degraded === true || res.statusCode === 502 || res.statusCode === 503);
+      setError(res.error || 'Failed to fetch backups');
+    }
     setLoading(false);
   };
 
@@ -54,6 +68,9 @@ export default function BackupsPage() {
       fetchBackups();
     } else {
       setError(res.error || 'Failed to create backup');
+      if (res.degraded) {
+        setHelperOffline(true);
+      }
     }
     setActionLoading(false);
   };
@@ -71,6 +88,9 @@ export default function BackupsPage() {
       fetchBackups();
     } else {
       setError(res.error || 'Failed to restore backup');
+      if (res.degraded) {
+        setHelperOffline(true);
+      }
     }
     setActionLoading(false);
   };
@@ -86,6 +106,9 @@ export default function BackupsPage() {
       fetchBackups();
     } else {
       setError(res.error || 'Failed to delete backup');
+      if (res.degraded) {
+        setHelperOffline(true);
+      }
     }
     setActionLoading(false);
   };
@@ -102,6 +125,11 @@ export default function BackupsPage() {
 
         {error && <div className="rounded-md bg-red-900/20 border border-red-800 p-3 text-sm text-red-400">{error}</div>}
         {message && <div className="rounded-md bg-emerald-900/20 border border-emerald-800 p-3 text-sm text-emerald-400">{message}</div>}
+        {helperOffline && (
+          <div className="rounded-md border border-yellow-800 bg-yellow-900/20 p-3 text-sm text-yellow-300">
+            Helper dependency is degraded. Backup actions may be unavailable until helper connectivity is restored.
+          </div>
+        )}
 
         {isAdmin && (
           <Card>
@@ -116,7 +144,11 @@ export default function BackupsPage() {
                   placeholder="Label (optional, e.g. before-update)"
                   pattern="[a-zA-Z0-9_\-]{0,50}"
                 />
-                <Button type="submit" disabled={actionLoading}>
+                <Button
+                  type="submit"
+                  disabled={actionLoading || helperOffline}
+                  title={helperOffline ? 'Helper is degraded — backup creation is unavailable' : undefined}
+                >
                   <Plus className="mr-1 h-4 w-4" />
                   {actionLoading ? 'Creating...' : 'Create'}
                 </Button>
@@ -136,7 +168,9 @@ export default function BackupsPage() {
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading...</p>
             ) : backups.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No backups found</p>
+              <p className="text-sm text-muted-foreground">
+                {helperOffline ? 'No helper-backed backup listing available while helper is degraded' : 'No backups found'}
+              </p>
             ) : (
               <div className="space-y-3">
                 {backups.map((backup) => (

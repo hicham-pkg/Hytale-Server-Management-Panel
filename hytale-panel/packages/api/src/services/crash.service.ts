@@ -6,6 +6,10 @@ import type { CrashEvent, CrashEventStatus } from '@hytale-panel/shared';
 
 const { crashEvents } = schema;
 const ACTIVE_CRASH_EVENT_WINDOW_MS = 60 * 60 * 1000;
+const CRASH_SCAN_LINE_LIMIT = 1000;
+const CRASH_SCAN_CURSOR_OVERLAP_MS = 60 * 1000;
+const SHORT_ISO_TIMESTAMP_REGEX = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/;
+let lastCrashScanSinceIso: string | null = null;
 
 function getActiveCrashCutoff(now = new Date()): Date {
   return new Date(now.getTime() - ACTIVE_CRASH_EVENT_WINDOW_MS);
@@ -36,14 +40,48 @@ function mapCrashEvent(event: typeof crashEvents.$inferSelect, now = new Date())
   };
 }
 
+function parseShortIsoTimestamp(line: string): Date | null {
+  const match = line.match(SHORT_ISO_TIMESTAMP_REGEX);
+  if (!match) return null;
+  const parsed = new Date(match[1]);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function updateCrashScanCursor(lines: string[]): void {
+  let latest: Date | null = null;
+  for (const line of lines) {
+    const ts = parseShortIsoTimestamp(line);
+    if (ts && (!latest || ts.getTime() > latest.getTime())) {
+      latest = ts;
+    }
+  }
+
+  if (!latest) {
+    return;
+  }
+
+  const overlapSince = new Date(Math.max(0, latest.getTime() - CRASH_SCAN_CURSOR_OVERLAP_MS));
+  lastCrashScanSinceIso = overlapSince.toISOString();
+}
+
+export function resetCrashScanCursorForTests(): void {
+  lastCrashScanSinceIso = null;
+}
+
 /**
  * Scan recent logs for crash patterns and store detected events.
  */
 export async function scanForCrashes(): Promise<number> {
-  const result = await callHelper('logs.read', { lines: 500 });
+  const params: { lines: number; since?: string } = { lines: CRASH_SCAN_LINE_LIMIT };
+  if (lastCrashScanSinceIso) {
+    params.since = lastCrashScanSinceIso;
+  }
+
+  const result = await callHelper('logs.read', params);
   if (!result.success) return 0;
 
   const data = result.data as { lines: string[] };
+  updateCrashScanCursor(data.lines);
   const events = detectCrashEvents(data.lines);
 
   const restartLoop = detectRestartLoop(data.lines);

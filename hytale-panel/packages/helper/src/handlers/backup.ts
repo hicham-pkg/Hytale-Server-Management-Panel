@@ -8,6 +8,7 @@ import { guardPath } from '../utils/path-guard';
 import { getServerStatus } from './server-control';
 import { BACKUP_FILENAME_REGEX, UUID_REGEX } from '@hytale-panel/shared';
 import type { HelperConfig } from '../config';
+import { enqueueGlobalOperation } from '../utils/operation-lock';
 
 // M2: normalize error messages returned across the RPC boundary so they
 // never leak host filesystem paths or raw errno details. The full error
@@ -165,7 +166,7 @@ export async function listBackups(
  * Restore a backup. Server MUST be stopped first.
  * Creates a safety snapshot before restoring.
  */
-export async function restoreBackup(
+async function _restoreBackup(
   config: HelperConfig,
   filename: string
 ): Promise<{ success: boolean; safetyBackup?: string; error?: string }> {
@@ -261,6 +262,13 @@ export async function restoreBackup(
   } catch (err) {
     return { success: false, error: normalizeError(err, 'Backup operation failed') };
   }
+}
+
+export function restoreBackup(
+  config: HelperConfig,
+  filename: string
+): Promise<{ success: boolean; safetyBackup?: string; error?: string }> {
+  return enqueueGlobalOperation(() => _restoreBackup(config, filename));
 }
 
 /**

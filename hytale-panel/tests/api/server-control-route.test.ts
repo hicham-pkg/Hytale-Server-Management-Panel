@@ -65,4 +65,64 @@ describe('server control routes', () => {
 
     await app.close();
   });
+
+  it('returns degraded helper status instead of masking outage as offline', async () => {
+    const { HelperUnavailableError } = await import('../../packages/api/src/services/helper-client');
+    serverServiceMock.getServerStatus.mockRejectedValue(
+      new HelperUnavailableError('server.status', 'Helper request timed out for server.status')
+    );
+
+    const { serverRoutes } = await import('../../packages/api/src/routes/server.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(serverRoutes);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/server/status',
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      success: false,
+      error: 'Helper service unavailable',
+      data: {
+        degraded: true,
+        dependency: 'helper',
+      },
+    });
+
+    await app.close();
+  });
+
+  it('returns degraded helper state when start depends on an unavailable helper', async () => {
+    const { HelperUnavailableError } = await import('../../packages/api/src/services/helper-client');
+    serverServiceMock.startServer.mockRejectedValue(
+      new HelperUnavailableError('server.start', 'Helper request timed out for server.start')
+    );
+
+    const { serverRoutes } = await import('../../packages/api/src/routes/server.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(serverRoutes);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/server/start',
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      success: false,
+      error: 'Helper service unavailable',
+      data: {
+        degraded: true,
+        dependency: 'helper',
+      },
+    });
+
+    await app.close();
+  });
 });

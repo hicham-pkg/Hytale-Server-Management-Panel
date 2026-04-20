@@ -31,15 +31,22 @@ interface CrashEvent {
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const { status, loading: statusLoading, refetch } = useServerStatus(5000);
+  const { status, loading: statusLoading, error: statusError, degraded: statusDegraded, refetch } = useServerStatus(5000);
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const [statsError, setStatsError] = useState('');
   const [recentCrashes, setRecentCrashes] = useState<CrashEvent[]>([]);
   const [actionLoading, setActionLoading] = useState('');
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     apiGet<SystemStats>('/api/stats/system').then((res) => {
-      if (res.success && res.data) setStats(res.data);
+      if (res.success && res.data) {
+        setStats(res.data);
+        setStatsError('');
+      } else {
+        setStats(null);
+        setStatsError(res.error ?? 'System stats unavailable');
+      }
     });
     apiGet<{ events: CrashEvent[] }>('/api/crashes?limit=5&status=active').then((res) => {
       if (res.success && res.data) setRecentCrashes(res.data.events);
@@ -86,6 +93,11 @@ export default function DashboardPage() {
               {status && <StatusBadge running={status.running} />}
             </CardHeader>
             <CardContent>
+              {statusDegraded && (
+                <div className="mb-3 rounded-md border border-yellow-800 bg-yellow-900/20 px-3 py-2 text-xs text-yellow-300">
+                  Control-plane degraded: {statusError ?? 'Helper dependency unavailable'}
+                </div>
+              )}
               {statusLoading ? (
                 <p className="text-sm text-muted-foreground">Loading...</p>
               ) : status ? (
@@ -156,7 +168,9 @@ export default function DashboardPage() {
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">Unable to fetch status</p>
+                <p className="text-sm text-muted-foreground">
+                  {statusError ? `Unable to fetch status: ${statusError}` : 'Unable to fetch status'}
+                </p>
               )}
             </CardContent>
           </Card>
@@ -170,6 +184,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold">{stats?.cpuUsagePercent ?? '--'}%</div>
+              {statsError && <p className="text-xs text-yellow-400">{statsError}</p>}
               <div className="mt-2 h-2 rounded-full bg-secondary">
                 <div
                   className="h-2 rounded-full bg-primary transition-all"

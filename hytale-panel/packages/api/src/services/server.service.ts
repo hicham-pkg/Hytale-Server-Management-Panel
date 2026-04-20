@@ -1,9 +1,20 @@
 import { callHelper } from './helper-client';
 import type { ServerStatus } from '@hytale-panel/shared';
 
-export async function getServerStatus(): Promise<ServerStatus & { serviceName: string }> {
+interface GetServerStatusOptions {
+  strict?: boolean;
+}
+
+export async function getServerStatus(
+  options: GetServerStatusOptions = {}
+): Promise<ServerStatus & { serviceName: string; error?: string }> {
+  const strict = options.strict === true;
   const result = await callHelper('server.status');
   if (!result.success) {
+    if (strict) {
+      throw new Error(result.error ?? 'Helper status request failed');
+    }
+
     return {
       running: false,
       pid: null,
@@ -11,6 +22,7 @@ export async function getServerStatus(): Promise<ServerStatus & { serviceName: s
       lastRestart: null,
       playerCount: null,
       serviceName: 'hytale-tmux.service',
+      error: result.error ?? 'Helper status request failed',
     };
   }
 

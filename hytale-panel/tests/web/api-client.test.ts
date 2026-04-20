@@ -41,12 +41,17 @@ describe('web api client', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: false,
+        status: 503,
         headers: {
           get: () => 'application/json',
         },
         text: async () => JSON.stringify({
           success: false,
-          data: { message: 'Helper socket unavailable inside API container' },
+          data: {
+            message: 'Helper socket unavailable inside API container',
+            degraded: true,
+            dependency: 'helper',
+          },
         }),
       })
     );
@@ -56,6 +61,9 @@ describe('web api client', () => {
     expect(result).toEqual({
       success: false,
       error: 'Helper socket unavailable inside API container',
+      statusCode: 503,
+      degraded: true,
+      dependency: 'helper',
     });
   });
 });

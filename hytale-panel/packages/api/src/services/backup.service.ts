@@ -5,12 +5,42 @@ import { HelperBackupListDataSchema } from '@hytale-panel/shared';
 import type { BackupMeta, HelperBackupFile } from '@hytale-panel/shared';
 
 const { backupMetadata } = schema;
+const BACKUP_CREATE_TIMEOUT_MS = 6 * 60 * 1000;
+const BACKUP_HASH_TIMEOUT_MS = 6 * 60 * 1000;
+const BACKUP_RESTORE_TIMEOUT_MS = 12 * 60 * 1000;
+
+export interface ListBackupsResult {
+  backups: BackupMeta[];
+  helperOffline: boolean;
+}
+
+async function listBackupsFromDbFallback(): Promise<ListBackupsResult> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(backupMetadata)
+    .orderBy(desc(backupMetadata.createdAt));
+
+  return {
+    helperOffline: true,
+    backups: rows.map((r) => ({
+      id: r.id,
+      filename: r.filename,
+      label: r.label,
+      sizeBytes: r.sizeBytes,
+      sha256: r.sha256,
+      createdBy: r.createdBy,
+      createdAt: r.createdAt.toISOString(),
+      helperOffline: true,
+    })),
+  };
+}
 
 export async function createBackup(
   label: string | undefined,
   userId: string
 ): Promise<{ success: boolean; backup?: BackupMeta; error?: string }> {
-  const result = await callHelper('backup.create', { label });
+  const result = await callHelper('backup.create', { label }, { timeoutMs: BACKUP_CREATE_TIMEOUT_MS });
   if (!result.success) {
     return { success: false, error: result.error };
   }
@@ -57,31 +87,21 @@ export async function createBackup(
  * Backups that exist on disk but not in the DB are still shown (with limited metadata).
  * Backups that exist in the DB but not on disk are excluded (they were deleted outside the panel).
  */
-export async function listBackups(): Promise<BackupMeta[]> {
+export async function listBackups(): Promise<ListBackupsResult> {
   // Step 1: Get the real files from the filesystem via helper
-  const fsResult = await callHelper('backup.list');
+  let fsResult;
+  try {
+    fsResult = await callHelper('backup.list');
+  } catch {
+    return listBackupsFromDbFallback();
+  }
 
   if (!fsResult.success) {
-    // Fallback: if helper is unreachable, fall back to DB-only listing.
+    // Fallback: if helper is unreachable or unavailable, fall back to DB-only listing.
     // Entries are flagged `helperOffline: true` so the UI can disable restore
     // and delete — we can't verify the file exists on disk or act on it until
     // the helper comes back.
-    const db = getDb();
-    const rows = await db
-      .select()
-      .from(backupMetadata)
-      .orderBy(desc(backupMetadata.createdAt));
-
-    return rows.map((r) => ({
-      id: r.id,
-      filename: r.filename,
-      label: r.label,
-      sizeBytes: r.sizeBytes,
-      sha256: r.sha256,
-      createdBy: r.createdBy,
-      createdAt: r.createdAt.toISOString(),
-      helperOffline: true,
-    }));
+    return listBackupsFromDbFallback();
   }
 
   const parsedDiskFiles = HelperBackupListDataSchema.parse(
@@ -90,7 +110,7 @@ export async function listBackups(): Promise<BackupMeta[]> {
   const diskFiles: HelperBackupFile[] = parsedDiskFiles.backups;
 
   if (diskFiles.length === 0) {
-    return [];
+    return { backups: [], helperOffline: false };
   }
 
   // Step 2: Fetch DB metadata for known filenames
@@ -140,7 +160,7 @@ export async function listBackups(): Promise<BackupMeta[]> {
   // Sort by createdAt descending
   backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  return backups;
+  return { backups, helperOffline: false };
 }
 
 export async function restoreBackup(
@@ -171,7 +191,7 @@ export async function restoreBackup(
   // directory. Catches on-disk corruption and tampering between create and restore.
   // Disk-only backups (no DB record) have no recorded hash and are allowed through.
   if (dbBackup && dbBackup.sha256) {
-    const hashResult = await callHelper('backup.hash', { filename });
+    const hashResult = await callHelper('backup.hash', { filename }, { timeoutMs: BACKUP_HASH_TIMEOUT_MS });
     if (!hashResult.success) {
       return { success: false, error: `Integrity check failed: ${hashResult.error ?? 'hash unavailable'}` };
     }
@@ -184,7 +204,7 @@ export async function restoreBackup(
     }
   }
 
-  const result = await callHelper('backup.restore', { filename });
+  const result = await callHelper('backup.restore', { filename }, { timeoutMs: BACKUP_RESTORE_TIMEOUT_MS });
   if (!result.success) {
     return { success: false, error: result.error };
   }

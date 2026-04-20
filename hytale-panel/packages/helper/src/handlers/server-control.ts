@@ -1,6 +1,7 @@
 import { runAllowlistedCommand, safeExec } from '../utils/command';
 import type { HelperConfig } from '../config';
 import { tmuxExec } from '../utils/tmux';
+import { enqueueGlobalOperation } from '../utils/operation-lock';
 
 function formatElapsedSeconds(elapsedSeconds: number | null): string | null {
   if (elapsedSeconds === null || Number.isNaN(elapsedSeconds) || elapsedSeconds < 0) {
@@ -396,18 +397,6 @@ async function stopTmuxRuntime(config: HelperConfig): Promise<{ success: boolean
   return { success: true, message: 'Server stop command issued' };
 }
 
-let operationLock: Promise<unknown> = Promise.resolve();
-
-// Serialize lifecycle operations so two simultaneous API requests can't race
-// `systemctl restart` and state detection during a ~30s startup window.
-// The `.catch(() => undefined)` on the tail stops a single failure from
-// poisoning every subsequent caller with the original rejection.
-function enqueueOperation<T>(op: () => Promise<T>): Promise<T> {
-  const run = operationLock.then(op, op);
-  operationLock = run.catch(() => undefined);
-  return run;
-}
-
 async function _startServer(config: HelperConfig): Promise<{ success: boolean; message: string }> {
   const statusResult = await runAllowlistedCommand('/usr/bin/systemctl', ['status', config.serviceName], SYSTEMCTL_STATUS_OPTS);
   const serviceStatus = extractSystemdStatus(statusResult.stdout + statusResult.stderr);
@@ -620,15 +609,15 @@ async function _restartServer(config: HelperConfig): Promise<{ success: boolean;
 }
 
 export function startServer(config: HelperConfig): Promise<{ success: boolean; message: string }> {
-  return enqueueOperation(() => _startServer(config));
+  return enqueueGlobalOperation(() => _startServer(config));
 }
 
 export function stopServer(config: HelperConfig): Promise<{ success: boolean; message: string }> {
-  return enqueueOperation(() => _stopServer(config));
+  return enqueueGlobalOperation(() => _stopServer(config));
 }
 
 export function restartServer(config: HelperConfig): Promise<{ success: boolean; message: string }> {
-  return enqueueOperation(() => _restartServer(config));
+  return enqueueGlobalOperation(() => _restartServer(config));
 }
 
 export interface ServerStatusResult {

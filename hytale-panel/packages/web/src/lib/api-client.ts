@@ -2,6 +2,15 @@ const API_BASE = '';
 
 let csrfToken = '';
 
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  statusCode?: number;
+  degraded?: boolean;
+  dependency?: string;
+}
+
 function extractStructuredError(body: unknown): string | undefined {
   if (!body || typeof body !== 'object') {
     return undefined;
@@ -24,6 +33,23 @@ function extractStructuredError(body: unknown): string | undefined {
   return undefined;
 }
 
+function extractDegradedMetadata(body: unknown): Pick<ApiResponse<unknown>, 'degraded' | 'dependency'> {
+  if (!body || typeof body !== 'object') {
+    return {};
+  }
+
+  const record = body as { data?: unknown };
+  if (!record.data || typeof record.data !== 'object') {
+    return {};
+  }
+
+  const data = record.data as { degraded?: unknown; dependency?: unknown };
+  return {
+    degraded: data.degraded === true ? true : undefined,
+    dependency: typeof data.dependency === 'string' ? data.dependency : undefined,
+  };
+}
+
 export function setCsrfToken(token: string) {
   csrfToken = token;
 }
@@ -31,7 +57,7 @@ export function setCsrfToken(token: string) {
 export async function apiRequest<T = unknown>(
   path: string,
   options: RequestInit = {}
-): Promise<{ success: boolean; data?: T; error?: string }> {
+): Promise<ApiResponse<T>> {
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),
   };
@@ -61,10 +87,10 @@ export async function apiRequest<T = unknown>(
 
     if (!trimmedBody) {
       if (!res.ok) {
-        return { success: false, error: `HTTP ${res.status}` };
+        return { success: false, error: `HTTP ${res.status}`, statusCode: res.status };
       }
 
-      return { success: false, error: 'Empty response from backend' };
+      return { success: false, error: 'Empty response from backend', statusCode: res.status };
     }
 
     if (!looksLikeJson) {
@@ -76,10 +102,10 @@ export async function apiRequest<T = unknown>(
       });
 
       if (res.status >= 500) {
-        return { success: false, error: 'Backend proxy failed' };
+        return { success: false, error: 'Backend proxy failed', statusCode: res.status };
       }
 
-      return { success: false, error: 'Unexpected non-JSON response from backend' };
+      return { success: false, error: 'Unexpected non-JSON response from backend', statusCode: res.status };
     }
 
     let json: { success: boolean; data?: T; error?: string };
@@ -94,14 +120,21 @@ export async function apiRequest<T = unknown>(
         error,
       });
 
-      return { success: false, error: 'Unexpected non-JSON response from backend' };
+      return { success: false, error: 'Unexpected non-JSON response from backend', statusCode: res.status };
     }
+
+    const degradedMeta = extractDegradedMetadata(json);
 
     if (!res.ok) {
-      return { success: false, error: extractStructuredError(json) ?? `HTTP ${res.status}` };
+      return {
+        success: false,
+        error: extractStructuredError(json) ?? `HTTP ${res.status}`,
+        statusCode: res.status,
+        ...degradedMeta,
+      };
     }
 
-    return json;
+    return { ...json, statusCode: res.status, ...degradedMeta };
   } catch (err) {
     console.error('API request failed', { path, error: err });
     return { success: false, error: 'Internal API is unreachable' };

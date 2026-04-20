@@ -25,6 +25,35 @@ function parseAllowedOrigins(raw: string): Set<string> {
   );
 }
 
+/**
+ * Compute lines appended to a moving capture window.
+ * Uses suffix/prefix overlap so fixed-size captures still stream correctly
+ * after the pane reaches its max line count.
+ */
+function computeAppendedLines(previousLines: string[], currentLines: string[]): string[] {
+  if (previousLines.length === 0) {
+    return currentLines;
+  }
+
+  const maxOverlap = Math.min(previousLines.length, currentLines.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    let matches = true;
+    for (let index = 0; index < overlap; index += 1) {
+      if (previousLines[previousLines.length - overlap + index] !== currentLines[index]) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      return currentLines.slice(overlap);
+    }
+  }
+
+  // No overlap (window jumped): emit current capture to resync.
+  return currentLines;
+}
+
 const activeConnectionsBySession = new Map<string, number>();
 
 export async function consoleWsHandler(fastify: FastifyInstance): Promise<void> {
@@ -71,11 +100,11 @@ export async function consoleWsHandler(fastify: FastifyInstance): Promise<void> 
     }
     activeConnectionsBySession.set(sessionId, currentConnections + 1);
 
-    const user = sessionResult.user;
+    let user = sessionResult.user;
     let subscribed = false;
     let pollInterval: ReturnType<typeof setInterval> | null = null;
     let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-    let lastCaptureSize = 0;
+    let lastCaptureLines: string[] = [];
     let messageCount = 0;
     let lastMessageReset = Date.now();
     let connectionReleased = false;
@@ -104,6 +133,18 @@ export async function consoleWsHandler(fastify: FastifyInstance): Promise<void> 
       }
     };
 
+    const ensureSessionValidOrClose = async (): Promise<boolean> => {
+      const latest = await validateSession(sessionId);
+      if (!latest.valid || !latest.user) {
+        sendMsg({ type: 'error', message: 'Session expired' });
+        socket.close(4001, 'Unauthorized');
+        return false;
+      }
+
+      user = latest.user;
+      return true;
+    };
+
     sendMsg({ type: 'connected', serverStatus: 'checking' });
 
     // Rate limiting: max 10 messages per second
@@ -129,29 +170,29 @@ export async function consoleWsHandler(fastify: FastifyInstance): Promise<void> 
 
         switch (message.type) {
           case 'subscribe': {
+            if (!(await ensureSessionValidOrClose())) {
+              return;
+            }
+
             if (subscribed) return;
             subscribed = true;
 
             // Initial capture
             const initial = await captureConsoleOutput(200);
             if (initial.success) {
-              lastCaptureSize = initial.lines.length;
+              lastCaptureLines = initial.lines;
               sendMsg({ type: 'log', lines: initial.lines, timestamp: new Date().toISOString() });
             }
 
-            // Start polling for new output. Counter-based diff: emit by length
-            // delta instead of searching for the previous last-line by content.
-            // Content matching silently dropped intermediate duplicates when the
-            // server emitted the same line repeatedly (e.g. "Saved world" × N).
+            // Start polling for new output.
             pollInterval = setInterval(async () => {
               try {
                 const capture = await captureConsoleOutput(200);
                 if (!capture.success) return;
 
-                const delta = capture.lines.length - lastCaptureSize;
-                if (delta > 0) {
-                  const newLines = capture.lines.slice(-delta);
-                  lastCaptureSize = capture.lines.length;
+                const newLines = computeAppendedLines(lastCaptureLines, capture.lines);
+                lastCaptureLines = capture.lines;
+                if (newLines.length > 0) {
                   sendMsg({ type: 'log', lines: sanitizeLogLines(newLines), timestamp: new Date().toISOString() });
                 }
               } catch {
@@ -163,6 +204,10 @@ export async function consoleWsHandler(fastify: FastifyInstance): Promise<void> 
           }
 
           case 'command': {
+            if (!(await ensureSessionValidOrClose())) {
+              return;
+            }
+
             // Only admins can send commands
             if (user.role !== 'admin') {
               sendMsg({ type: 'error', message: 'Insufficient permissions' });
@@ -199,7 +244,12 @@ export async function consoleWsHandler(fastify: FastifyInstance): Promise<void> 
 
     // Heartbeat
     heartbeatInterval = setInterval(() => {
-      sendMsg({ type: 'ping' });
+      void (async () => {
+        if (!(await ensureSessionValidOrClose())) {
+          return;
+        }
+        sendMsg({ type: 'ping' });
+      })();
     }, WS_HEARTBEAT_INTERVAL_MS);
 
     socket.on('close', () => {
@@ -215,4 +265,3 @@ export async function consoleWsHandler(fastify: FastifyInstance): Promise<void> 
     });
   });
 }
-

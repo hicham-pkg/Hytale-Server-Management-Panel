@@ -19,7 +19,7 @@ export default function WhitelistPage() {
   const { user } = useAuth();
   const [whitelistEnabled, setWhitelistEnabled] = useState(false);
   const [uuidList, setUuidList] = useState<string[]>([]);
-  const [serverRunning, setServerRunning] = useState(false);
+  const [serverRunning, setServerRunning] = useState<boolean | null>(null);
   const [newPlayer, setNewPlayer] = useState('');
   const [removePlayerName, setRemovePlayerName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -33,6 +33,12 @@ export default function WhitelistPage() {
       setWhitelistEnabled(res.data.enabled);
       setUuidList(res.data.list);
       setServerRunning(res.data.serverRunning);
+      setError('');
+    } else {
+      setWhitelistEnabled(false);
+      setUuidList([]);
+      setServerRunning(null);
+      setError(res.error || 'Failed to fetch whitelist');
     }
     setLoading(false);
   };
@@ -127,11 +133,19 @@ export default function WhitelistPage() {
         {message && <div className="rounded-md bg-emerald-900/20 border border-emerald-800 p-3 text-sm text-emerald-400">{message}</div>}
 
         {/* Server status indicator */}
-        <div className={`rounded-md p-3 text-sm ${serverRunning ? 'bg-emerald-900/20 border border-emerald-800 text-emerald-400' : 'bg-yellow-900/20 border border-yellow-800 text-yellow-400'}`}>
-          Server is <strong>{serverRunning ? 'online' : 'offline'}</strong>
-          {serverRunning
-            ? ' — Add/remove players by username via console commands.'
-            : ' — You can toggle the whitelist and remove UUIDs from the file. Adding players requires the server to be running.'}
+        <div className={`rounded-md p-3 text-sm ${
+          serverRunning === null
+            ? 'bg-yellow-900/20 border border-yellow-800 text-yellow-300'
+            : serverRunning
+              ? 'bg-emerald-900/20 border border-emerald-800 text-emerald-400'
+              : 'bg-yellow-900/20 border border-yellow-800 text-yellow-400'
+        }`}>
+          Server is <strong>{serverRunning === null ? 'unavailable' : (serverRunning ? 'online' : 'offline')}</strong>
+          {serverRunning === null
+            ? ' — Helper status is degraded. Runtime whitelist actions are temporarily unavailable.'
+            : serverRunning
+              ? ' — Add/remove players by username via console commands.'
+              : ' — You can toggle the whitelist and remove UUIDs from the file. Adding players requires the server to be running.'}
         </div>
 
         {/* Whitelist toggle */}
@@ -147,7 +161,8 @@ export default function WhitelistPage() {
                   variant="outline"
                   size="sm"
                   onClick={handleToggle}
-                  disabled={actionLoading}
+                  disabled={actionLoading || serverRunning === null}
+                  title={serverRunning === null ? 'Helper status is degraded — toggle unavailable' : undefined}
                 >
                   {whitelistEnabled ? (
                     <><ToggleRight className="mr-1 h-4 w-4 text-emerald-400" /> Enabled</>
@@ -182,7 +197,7 @@ export default function WhitelistPage() {
                     Add
                   </Button>
                 </form>
-              ) : (
+              ) : serverRunning === false ? (
                 <div className="flex items-start gap-3 rounded-md bg-yellow-900/20 border border-yellow-800 p-3">
                   <AlertTriangle className="h-5 w-5 text-yellow-400 mt-0.5 shrink-0" />
                   <div className="text-sm text-yellow-300">
@@ -194,13 +209,23 @@ export default function WhitelistPage() {
                     </p>
                   </div>
                 </div>
+              ) : (
+                <div className="flex items-start gap-3 rounded-md bg-yellow-900/20 border border-yellow-800 p-3">
+                  <AlertTriangle className="h-5 w-5 text-yellow-400 mt-0.5 shrink-0" />
+                  <div className="text-sm text-yellow-300">
+                    <p className="font-medium">Server state unavailable</p>
+                    <p className="text-yellow-400/80 mt-1">
+                      Helper connectivity is degraded, so online/offline whitelist actions are temporarily disabled.
+                    </p>
+                  </div>
+                </div>
               )}
             </CardContent>
           </Card>
         )}
 
         {/* Remove player by name — only when server is running */}
-        {isAdmin && serverRunning && (
+        {isAdmin && serverRunning === true && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
@@ -251,7 +276,7 @@ export default function WhitelistPage() {
                     className="flex items-center justify-between rounded-md border px-4 py-2"
                   >
                     <span className="font-mono text-sm">{uuid}</span>
-                    {isAdmin && !serverRunning && (
+                    {isAdmin && serverRunning === false && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -270,9 +295,11 @@ export default function WhitelistPage() {
             {!loading && uuidList.length > 0 && (
               <p className="text-xs text-muted-foreground mt-3">
                 The whitelist file stores player UUIDs. UUID-to-username resolution is not available.
-                {serverRunning
+                {serverRunning === true
                   ? ' To remove a player, use the "Remove by Username" form above.'
-                  : ' While the server is offline, you can remove UUIDs directly from the file using the trash icon.'}
+                  : serverRunning === false
+                    ? ' While the server is offline, you can remove UUIDs directly from the file using the trash icon.'
+                    : ' Server status is currently unavailable.'}
               </p>
             )}
           </CardContent>

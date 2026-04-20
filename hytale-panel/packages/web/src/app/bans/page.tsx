@@ -27,7 +27,13 @@ export default function BansPage() {
 
   const fetchBans = async () => {
     const res = await apiGet<{ entries: BanEntry[] }>('/api/bans');
-    if (res.success && res.data) setEntries(res.data.entries);
+    if (res.success && res.data) {
+      setEntries(res.data.entries);
+      setError('');
+    } else {
+      setEntries([]);
+      setError(res.error || 'Failed to fetch bans');
+    }
     setLoading(false);
   };
 

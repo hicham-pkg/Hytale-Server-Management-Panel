@@ -356,6 +356,11 @@ hytale-panel/
 - **2FA (TOTP)** — Required for admin accounts; optional for readonly accounts
 - **Dark Theme** — Modern dark admin interface
 
+## Known Limitations
+
+- Crash detection is best-effort and keeps its rolling log cursor in API process memory. If the API restarts, the next scan can miss some burst logs that were already rotated out of the bounded journal window.
+- Backup create/restore operations are synchronous HTTP requests. Reverse proxies must keep `/api/` upstream timeouts high enough (see `docs/reverse-proxy.md`) or clients may time out while the helper continues working.
+
 ## Whitelist Behavior
 
 The Hytale whitelist file (`whitelist.json`) stores UUIDs, not player names:

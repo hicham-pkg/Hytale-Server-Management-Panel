@@ -25,6 +25,11 @@ export async function addBan(
     if (cmdResult.success) {
       return { success: true, message: `Sent ban command for ${name}` };
     }
+
+    return {
+      success: false,
+      message: `Server is running; live ban command failed. File was not modified. ${cmdResult.error ?? ''}`.trim(),
+    };
   }
 
   // File-based fallback
@@ -59,6 +64,11 @@ export async function removeBan(
     if (cmdResult.success) {
       return { success: true, message: `Sent unban command for ${name}` };
     }
+
+    return {
+      success: false,
+      message: `Server is running; live unban command failed. File was not modified. ${cmdResult.error ?? ''}`.trim(),
+    };
   }
 
   const readResult = await callHelper('bans.read');
