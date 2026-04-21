@@ -15,6 +15,9 @@ const pathGuardMock = vi.hoisted(() => ({
 
 const fsMock = vi.hoisted(() => ({
   access: vi.fn(),
+  mkdir: vi.fn(),
+  writeFile: vi.fn(),
+  rename: vi.fn(),
 }));
 
 vi.mock('../../packages/helper/src/utils/command', () => commandMock);
@@ -53,6 +56,12 @@ describe('helper restore/lifecycle serialization', () => {
     tmuxMock.tmuxExec.mockReset();
     pathGuardMock.guardPath.mockReset();
     fsMock.access.mockReset();
+    fsMock.mkdir.mockReset();
+    fsMock.writeFile.mockReset();
+    fsMock.rename.mockReset();
+    fsMock.mkdir.mockResolvedValue(undefined);
+    fsMock.writeFile.mockResolvedValue(undefined);
+    fsMock.rename.mockResolvedValue(undefined);
   });
 
   it('queues lifecycle operations behind an in-flight restore operation', async () => {
@@ -72,10 +81,9 @@ describe('helper restore/lifecycle serialization', () => {
     const { stopServer } = await import('../../packages/helper/src/handlers/server-control');
 
     const restorePromise = restoreBackup(helperConfig, 'backup.tar.gz');
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(commandMock.runAllowlistedCommand).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(commandMock.runAllowlistedCommand).toHaveBeenCalledTimes(1);
+    });
 
     const stopPromise = stopServer(helperConfig);
     await Promise.resolve();
@@ -86,9 +94,10 @@ describe('helper restore/lifecycle serialization', () => {
 
     accessGate.reject(Object.assign(new Error('missing backup'), { code: 'ENOENT' }));
 
-    await expect(restorePromise).resolves.toEqual({
+    await expect(restorePromise).resolves.toMatchObject({
       success: false,
       error: 'Backup file not found',
+      operationId: expect.any(String),
     });
 
     await expect(stopPromise).resolves.toEqual({

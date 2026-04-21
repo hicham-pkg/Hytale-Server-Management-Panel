@@ -1,15 +1,16 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
-import { getDb, schema } from '../db';
+import { getDb, getPool, schema } from '../db';
 import { callHelper } from './helper-client';
 import { detectCrashEvents, detectRestartLoop } from '../utils/log-parser';
 import type { CrashEvent, CrashEventStatus } from '@hytale-panel/shared';
 
-const { crashEvents } = schema;
+const { crashEvents, crashScanState } = schema;
 const ACTIVE_CRASH_EVENT_WINDOW_MS = 60 * 60 * 1000;
 const CRASH_SCAN_LINE_LIMIT = 1000;
 const CRASH_SCAN_CURSOR_OVERLAP_MS = 60 * 1000;
 const SHORT_ISO_TIMESTAMP_REGEX = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/;
-let lastCrashScanSinceIso: string | null = null;
+const CRASH_SCAN_STATE_ID = 1;
+const CRASH_SCAN_LOCK_KEY = 0x4353434e; // 'CSCN' as ASCII bytes
 
 function getActiveCrashCutoff(now = new Date()): Date {
   return new Date(now.getTime() - ACTIVE_CRASH_EVENT_WINDOW_MS);
@@ -47,7 +48,7 @@ function parseShortIsoTimestamp(line: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function updateCrashScanCursor(lines: string[]): void {
+function computeNextCrashScanCursor(lines: string[]): Date | null {
   let latest: Date | null = null;
   for (const line of lines) {
     const ts = parseShortIsoTimestamp(line);
@@ -57,76 +58,157 @@ function updateCrashScanCursor(lines: string[]): void {
   }
 
   if (!latest) {
-    return;
+    return null;
   }
 
   const overlapSince = new Date(Math.max(0, latest.getTime() - CRASH_SCAN_CURSOR_OVERLAP_MS));
-  lastCrashScanSinceIso = overlapSince.toISOString();
+  return overlapSince;
 }
 
-export function resetCrashScanCursorForTests(): void {
-  lastCrashScanSinceIso = null;
+function parsePersistedCursor(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+async function loadPersistedCrashScanCursor(): Promise<Date | null> {
+  const db = getDb();
+  const [state] = await db
+    .select()
+    .from(crashScanState)
+    .where(eq(crashScanState.id, CRASH_SCAN_STATE_ID))
+    .limit(1);
+
+  if (!state) {
+    return null;
+  }
+
+  return parsePersistedCursor(state.cursorSince);
+}
+
+async function persistCrashScanState(cursorSince: Date | null, lastLineCount: number): Promise<void> {
+  const db = getDb();
+  const now = new Date();
+  const normalizedCount = Math.max(0, lastLineCount);
+
+  const [existing] = await db
+    .select({ id: crashScanState.id })
+    .from(crashScanState)
+    .where(eq(crashScanState.id, CRASH_SCAN_STATE_ID))
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(crashScanState)
+      .set({
+        cursorSince,
+        lastScannedAt: now,
+        lastLineCount: normalizedCount,
+        updatedAt: now,
+      })
+      .where(eq(crashScanState.id, CRASH_SCAN_STATE_ID));
+    return;
+  }
+
+  await db.insert(crashScanState).values({
+    id: CRASH_SCAN_STATE_ID,
+    cursorSince,
+    lastScannedAt: now,
+    lastLineCount: normalizedCount,
+    updatedAt: now,
+  });
 }
 
 /**
  * Scan recent logs for crash patterns and store detected events.
  */
 export async function scanForCrashes(): Promise<number> {
-  const params: { lines: number; since?: string } = { lines: CRASH_SCAN_LINE_LIMIT };
-  if (lastCrashScanSinceIso) {
-    params.since = lastCrashScanSinceIso;
-  }
+  const lockClient = await getPool().connect();
+  let lockAcquired = false;
 
-  const result = await callHelper('logs.read', params);
-  if (!result.success) return 0;
+  try {
+    const lockResult = await lockClient.query<{ locked: boolean }>(
+      'SELECT pg_try_advisory_lock($1) AS locked',
+      [CRASH_SCAN_LOCK_KEY]
+    );
+    lockAcquired = lockResult.rows[0]?.locked === true;
 
-  const data = result.data as { lines: string[] };
-  updateCrashScanCursor(data.lines);
-  const events = detectCrashEvents(data.lines);
-
-  const restartLoop = detectRestartLoop(data.lines);
-  if (restartLoop) events.push(restartLoop);
-
-  if (events.length === 0) return 0;
-
-  const db = getDb();
-  let inserted = 0;
-
-  const CRASH_DEDUP_BUCKET_MS = 60 * 60 * 1000;
-  const bucketStart = new Date(Math.floor(Date.now() / CRASH_DEDUP_BUCKET_MS) * CRASH_DEDUP_BUCKET_MS);
-
-  for (const event of events) {
-    try {
-      // Dedup by (pattern, summary, time bucket). rawLog includes surrounding
-      // context lines that shift as the log buffer scrolls, so matching on it
-      // would let the same underlying crash insert a new row every scan cycle.
-      const [recent] = await db
-        .select()
-        .from(crashEvents)
-        .where(
-          and(
-            eq(crashEvents.pattern, event.pattern),
-            eq(crashEvents.summary, event.summary),
-            gte(crashEvents.detectedAt, bucketStart)
-          )
-        )
-        .limit(1);
-
-      if (!recent) {
-        await db.insert(crashEvents).values({
-          severity: event.severity,
-          pattern: event.pattern,
-          summary: event.summary,
-          rawLog: event.rawLog?.slice(0, 5000) ?? null,
-        });
-        inserted++;
-      }
-    } catch (err) {
-      console.error('Failed to insert crash event:', err);
+    if (!lockAcquired) {
+      return 0;
     }
-  }
 
-  return inserted;
+    const persistedCursor = await loadPersistedCrashScanCursor();
+    const params: { lines: number; since?: string } = { lines: CRASH_SCAN_LINE_LIMIT };
+    if (persistedCursor) {
+      params.since = persistedCursor.toISOString();
+    }
+
+    const result = await callHelper('logs.read', params);
+    if (!result.success) {
+      await persistCrashScanState(persistedCursor, 0);
+      return 0;
+    }
+
+    const data = result.data as { lines: string[] };
+    const lines = Array.isArray(data.lines) ? data.lines : [];
+    const nextCursor = computeNextCrashScanCursor(lines) ?? persistedCursor;
+    const events = detectCrashEvents(lines);
+
+    const restartLoop = detectRestartLoop(lines);
+    if (restartLoop) events.push(restartLoop);
+
+    let inserted = 0;
+
+    if (events.length > 0) {
+      const db = getDb();
+      const CRASH_DEDUP_BUCKET_MS = 60 * 60 * 1000;
+      const bucketStart = new Date(Math.floor(Date.now() / CRASH_DEDUP_BUCKET_MS) * CRASH_DEDUP_BUCKET_MS);
+
+      for (const event of events) {
+        try {
+          // Dedup by (pattern, summary, time bucket). rawLog includes surrounding
+          // context lines that shift as the log buffer scrolls, so matching on it
+          // would let the same underlying crash insert a new row every scan cycle.
+          const [recent] = await db
+            .select()
+            .from(crashEvents)
+            .where(
+              and(
+                eq(crashEvents.pattern, event.pattern),
+                eq(crashEvents.summary, event.summary),
+                gte(crashEvents.detectedAt, bucketStart)
+              )
+            )
+            .limit(1);
+
+          if (!recent) {
+            await db.insert(crashEvents).values({
+              severity: event.severity,
+              pattern: event.pattern,
+              summary: event.summary,
+              rawLog: event.rawLog?.slice(0, 5000) ?? null,
+            });
+            inserted++;
+          }
+        } catch (err) {
+          console.error('Failed to insert crash event:', err);
+        }
+      }
+    }
+
+    await persistCrashScanState(nextCursor ?? null, lines.length);
+    return inserted;
+  } finally {
+    if (lockAcquired) {
+      await lockClient.query('SELECT pg_advisory_unlock($1)', [CRASH_SCAN_LOCK_KEY]).catch(() => undefined);
+    }
+    lockClient.release();
+  }
 }
 
 /**

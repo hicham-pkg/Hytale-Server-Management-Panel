@@ -73,7 +73,24 @@ export async function userRoutes(fastify: FastifyInstance): Promise<void> {
       if (body.role) updates.role = body.role;
       if (body.password) updates.passwordHash = await hashPassword(body.password);
 
-      await db.update(users).set(updates).where(eq(users.id, params.id));
+      const changedFields = Object.keys(body).filter((key) => (body as Record<string, unknown>)[key] !== undefined);
+      const updatedUsers = await db
+        .update(users)
+        .set(updates)
+        .where(eq(users.id, params.id))
+        .returning({ id: users.id });
+
+      if (updatedUsers.length === 0) {
+        await logAudit({
+          userId: request.currentUser!.id,
+          action: 'user.update',
+          target: params.id,
+          details: { changedFields, reason: 'user_not_found' },
+          ipAddress: request.ip,
+          success: false,
+        });
+        return reply.status(404).send({ success: false, error: 'User not found' });
+      }
 
       // If role or password changed, invalidate all sessions for that user
       if (body.role || body.password) {
@@ -84,7 +101,7 @@ export async function userRoutes(fastify: FastifyInstance): Promise<void> {
         userId: request.currentUser!.id,
         action: 'user.update',
         target: params.id,
-        details: { changedFields: Object.keys(body).filter(k => (body as any)[k] !== undefined) },
+        details: { changedFields },
         ipAddress: request.ip,
         success: true,
       });
@@ -105,7 +122,22 @@ export async function userRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.status(400).send({ success: false, error: 'Cannot delete your own account' });
       }
 
-      await db.delete(users).where(eq(users.id, params.id));
+      const deletedUsers = await db
+        .delete(users)
+        .where(eq(users.id, params.id))
+        .returning({ id: users.id });
+
+      if (deletedUsers.length === 0) {
+        await logAudit({
+          userId: request.currentUser!.id,
+          action: 'user.delete',
+          target: params.id,
+          details: { reason: 'user_not_found' },
+          ipAddress: request.ip,
+          success: false,
+        });
+        return reply.status(404).send({ success: false, error: 'User not found' });
+      }
 
       await logAudit({
         userId: request.currentUser!.id,

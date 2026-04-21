@@ -12,11 +12,19 @@ const backupServiceMock = vi.hoisted(() => ({
   deleteBackup: vi.fn(),
 }));
 
+const backupJobServiceMock = vi.hoisted(() => ({
+  enqueueCreateBackupJob: vi.fn(),
+  enqueueRestoreBackupJob: vi.fn(),
+  getBackupJob: vi.fn(),
+  listBackupJobs: vi.fn(),
+}));
+
 const auditServiceMock = vi.hoisted(() => ({
   logAudit: vi.fn(),
 }));
 
 vi.mock('../../packages/api/src/services/backup.service', () => backupServiceMock);
+vi.mock('../../packages/api/src/services/backup-job.service', () => backupJobServiceMock);
 vi.mock('../../packages/api/src/services/audit.service', () => auditServiceMock);
 vi.mock('../../packages/api/src/middleware/require-auth', () => ({
   requireAuth: async (request: { currentUser?: { id: string; role: string } }) => {
@@ -33,15 +41,31 @@ describe('backup routes degraded helper handling', () => {
     backupServiceMock.createBackup.mockReset();
     backupServiceMock.restoreBackup.mockReset();
     backupServiceMock.deleteBackup.mockReset();
+    backupJobServiceMock.enqueueCreateBackupJob.mockReset();
+    backupJobServiceMock.enqueueRestoreBackupJob.mockReset();
+    backupJobServiceMock.getBackupJob.mockReset();
+    backupJobServiceMock.listBackupJobs.mockReset();
     auditServiceMock.logAudit.mockReset();
     auditServiceMock.logAudit.mockResolvedValue(undefined);
   });
 
-  it('returns degraded helper state when backup create hits helper transport failure', async () => {
-    const { HelperUnavailableError } = await import('../../packages/api/src/services/helper-client');
-    backupServiceMock.createBackup.mockRejectedValue(
-      new HelperUnavailableError('backup.create', 'Helper request timed out for backup.create')
-    );
+  it('enqueues backup create requests and returns 202 Accepted', async () => {
+    backupJobServiceMock.enqueueCreateBackupJob.mockResolvedValue({
+      id: '550e8400-e29b-41d4-a716-4466554400aa',
+      type: 'create',
+      status: 'queued',
+      requestPayload: {},
+      resultPayload: null,
+      error: null,
+      requestedBy: '550e8400-e29b-41d4-a716-446655440001',
+      workerId: null,
+      leaseExpiresAt: null,
+      lastHeartbeatAt: null,
+      createdAt: '2026-04-20T10:00:00.000Z',
+      startedAt: null,
+      finishedAt: null,
+      updatedAt: '2026-04-20T10:00:00.000Z',
+    });
 
     const { backupRoutes } = await import('../../packages/api/src/routes/backup.routes');
 
@@ -55,15 +79,70 @@ describe('backup routes degraded helper handling', () => {
       payload: {},
     });
 
-    expect(response.statusCode).toBe(503);
+    expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual({
-      success: false,
-      error: 'Helper service unavailable',
+      success: true,
       data: {
-        degraded: true,
-        dependency: 'helper',
+        job: expect.objectContaining({
+          id: '550e8400-e29b-41d4-a716-4466554400aa',
+          type: 'create',
+          status: 'queued',
+        }),
       },
     });
+    expect(backupJobServiceMock.enqueueCreateBackupJob).toHaveBeenCalledWith(
+      undefined,
+      '550e8400-e29b-41d4-a716-446655440001'
+    );
+
+    await app.close();
+  });
+
+  it('enqueues backup restore requests and returns 202 Accepted', async () => {
+    backupJobServiceMock.enqueueRestoreBackupJob.mockResolvedValue({
+      id: '550e8400-e29b-41d4-a716-4466554400bb',
+      type: 'restore',
+      status: 'queued',
+      requestPayload: { backupId: '550e8400-e29b-41d4-a716-446655440111' },
+      resultPayload: null,
+      error: null,
+      requestedBy: '550e8400-e29b-41d4-a716-446655440001',
+      workerId: null,
+      leaseExpiresAt: null,
+      lastHeartbeatAt: null,
+      createdAt: '2026-04-20T10:00:00.000Z',
+      startedAt: null,
+      finishedAt: null,
+      updatedAt: '2026-04-20T10:00:00.000Z',
+    });
+
+    const { backupRoutes } = await import('../../packages/api/src/routes/backup.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(backupRoutes);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/backups/550e8400-e29b-41d4-a716-446655440111/restore',
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({
+      success: true,
+      data: {
+        job: expect.objectContaining({
+          id: '550e8400-e29b-41d4-a716-4466554400bb',
+          type: 'restore',
+          status: 'queued',
+        }),
+      },
+    });
+    expect(backupJobServiceMock.enqueueRestoreBackupJob).toHaveBeenCalledWith(
+      '550e8400-e29b-41d4-a716-446655440111',
+      '550e8400-e29b-41d4-a716-446655440001'
+    );
 
     await app.close();
   });

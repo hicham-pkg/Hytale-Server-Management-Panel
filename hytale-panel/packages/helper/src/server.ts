@@ -5,6 +5,7 @@ import {
   HELPER_OPERATIONS,
   BACKUP_FILENAME_REGEX,
   BACKUP_LABEL_REGEX,
+  UUID_REGEX,
   COMMAND_CHAR_ALLOWLIST,
   MAX_COMMAND_LENGTH,
 } from '@hytale-panel/shared';
@@ -15,7 +16,15 @@ import { startServer, stopServer, restartServer, getServerStatus } from './handl
 import { sendCommand, capturePane } from './handlers/console';
 import { readLogs } from './handlers/logs';
 import { readWhitelist, writeWhitelist, readBans, writeBans } from './handlers/files';
-import { createBackup, listBackups, restoreBackup, deleteBackup, hashBackup } from './handlers/backup';
+import {
+  createBackup,
+  listBackups,
+  restoreBackup,
+  deleteBackup,
+  hashBackup,
+  getBackupOperationStatus,
+  reconcileRunningBackupOperations,
+} from './handlers/backup';
 import { getSystemStats, getProcessStats } from './handlers/stats';
 
 // Cap on the total /rpc request body. All legitimate helper payloads fit
@@ -33,6 +42,14 @@ const RequestSchema = z.object({
 
 export async function createHelperServer() {
   const config = loadConfig();
+
+  // Best-effort startup reconciliation so stale "running" operations from a
+  // previous helper instance can be promoted to a terminal state.
+  try {
+    await reconcileRunningBackupOperations(config);
+  } catch (err) {
+    console.error('[helper/backup] startup reconciliation failed:', err);
+  }
 
   // Remove stale socket file
   try {
@@ -189,7 +206,10 @@ async function executeOperation(
       const label = params.label
         ? z.string().regex(BACKUP_LABEL_REGEX).parse(params.label)
         : undefined;
-      const result = await createBackup(config, label);
+      const operationId = params.operationId
+        ? z.string().regex(UUID_REGEX).parse(params.operationId)
+        : undefined;
+      const result = await createBackup(config, label, operationId);
       return { success: result.success, data: result.backup, error: result.error };
     }
     case 'backup.list': {
@@ -198,8 +218,16 @@ async function executeOperation(
     }
     case 'backup.restore': {
       const filename = z.string().regex(BACKUP_FILENAME_REGEX).parse(params.filename);
-      const result = await restoreBackup(config, filename);
+      const operationId = params.operationId
+        ? z.string().regex(UUID_REGEX).parse(params.operationId)
+        : undefined;
+      const result = await restoreBackup(config, filename, operationId);
       return { success: result.success, data: { safetyBackup: result.safetyBackup }, error: result.error };
+    }
+    case 'backup.operationStatus': {
+      const operationId = z.string().regex(UUID_REGEX).parse(params.operationId);
+      const result = await getBackupOperationStatus(config, operationId);
+      return { success: result.success, data: { found: result.found, operation: result.operation }, error: result.error };
     }
     case 'backup.delete': {
       const filename = z.string().regex(BACKUP_FILENAME_REGEX).parse(params.filename);

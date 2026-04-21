@@ -52,4 +52,34 @@ describe('console routes degraded helper handling', () => {
 
     await app.close();
   });
+
+  it('returns 409 when console capture fails without a transport outage', async () => {
+    consoleServiceMock.captureConsoleOutput.mockResolvedValue({
+      success: false,
+      lines: [],
+      error: 'tmux session not found',
+    });
+
+    const { consoleRoutes } = await import('../../packages/api/src/routes/console.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(consoleRoutes);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/console/history?lines=10',
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      success: false,
+      data: {
+        lines: [],
+      },
+      error: 'tmux session not found',
+    });
+
+    await app.close();
+  });
 });

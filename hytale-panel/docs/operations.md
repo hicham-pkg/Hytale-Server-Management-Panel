@@ -435,7 +435,7 @@ The API runs these background jobs automatically:
 | Session cleanup | Every 15 minutes | Removes expired sessions |
 
 These run in-process via `node-cron` — no external cron configuration needed.
-Crash detection is best-effort: the rolling log cursor is kept in API process memory, so an API restart can lose cursor position and miss some high-volume burst logs between scans.
+Crash detection is best-effort: the scan cursor is persisted in the database, but each scan still reads a bounded log window, so very high-volume bursts can still evade detection between scan intervals.
 
 Automatic backup scheduling and retention pruning are not implemented in the shipped panel yet. Backups are manual, and retention cleanup must be handled by the operator.
 

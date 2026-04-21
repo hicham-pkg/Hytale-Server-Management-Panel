@@ -193,6 +193,36 @@ describe('Backup service helper contract', () => {
     expect(dbState.insertedRows).toHaveLength(1);
   });
 
+  it('forwards operationId to helper backup.create when provided', async () => {
+    helperClientMock.callHelper.mockResolvedValue({
+      success: true,
+      data: {
+        id: '550e8400-e29b-41d4-a716-446655440010',
+        filename: '2026-03-26T10-00-00-000Z_world.tar.gz',
+        sizeBytes: 4321,
+        sha256: 'def456',
+        createdAt: '2026-03-26T10:00:00.000Z',
+      },
+    });
+
+    const { createBackup } = await import('../../packages/api/src/services/backup.service');
+    const result = await createBackup(
+      'nightly',
+      '550e8400-e29b-41d4-a716-446655440001',
+      '550e8400-e29b-41d4-a716-446655440099'
+    );
+
+    expect(result.success).toBe(true);
+    expect(helperClientMock.callHelper).toHaveBeenCalledWith(
+      'backup.create',
+      {
+        label: 'nightly',
+        operationId: '550e8400-e29b-41d4-a716-446655440099',
+      },
+      { timeoutMs: 360000 }
+    );
+  });
+
   it('uses extended helper timeouts for backup.hash and backup.restore', async () => {
     dbState.rows = [
       {
@@ -226,5 +256,63 @@ describe('Backup service helper contract', () => {
       { filename: '2026-03-24T10-00-00-000Z_world.tar.gz' },
       { timeoutMs: 720000 }
     );
+  });
+
+  it('maps helper backup operation state responses for job reconciliation', async () => {
+    helperClientMock.callHelper.mockResolvedValue({
+      success: true,
+      data: {
+        found: true,
+        operation: {
+          status: 'succeeded',
+          result: {
+            safetyBackup: 'safety-pre-restore.tar.gz',
+          },
+        },
+      },
+    });
+
+    const { getBackupOperationStatus } = await import('../../packages/api/src/services/backup.service');
+    const result = await getBackupOperationStatus('550e8400-e29b-41d4-a716-446655440099');
+
+    expect(result).toEqual({
+      success: true,
+      found: true,
+      status: 'succeeded',
+      resultPayload: {
+        safetyBackup: 'safety-pre-restore.tar.gz',
+      },
+      error: undefined,
+    });
+    expect(helperClientMock.callHelper).toHaveBeenCalledWith(
+      'backup.operationStatus',
+      { operationId: '550e8400-e29b-41d4-a716-446655440099' }
+    );
+  });
+
+  it('maps helper unknown operation state and phase for conservative reconciliation', async () => {
+    helperClientMock.callHelper.mockResolvedValue({
+      success: true,
+      data: {
+        found: true,
+        operation: {
+          status: 'unknown',
+          phase: 'unknown',
+          error: 'Restore outcome unknown after helper restart',
+        },
+      },
+    });
+
+    const { getBackupOperationStatus } = await import('../../packages/api/src/services/backup.service');
+    const result = await getBackupOperationStatus('550e8400-e29b-41d4-a716-446655440098');
+
+    expect(result).toEqual({
+      success: true,
+      found: true,
+      status: 'unknown',
+      phase: 'unknown',
+      resultPayload: null,
+      error: 'Restore outcome unknown after helper restart',
+    });
   });
 });

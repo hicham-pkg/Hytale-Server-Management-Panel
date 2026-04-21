@@ -17,6 +17,9 @@ export default function ConsolePage() {
   const [lines, setLines] = useState<string[]>([]);
   const [command, setCommand] = useState('');
   const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [consoleDegraded, setConsoleDegraded] = useState(false);
+  const [connectionBlockReason, setConnectionBlockReason] = useState<string | null>(null);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
   const outputRef = useRef<HTMLDivElement>(null);
@@ -25,9 +28,34 @@ export default function ConsolePage() {
   useEffect(() => {
     const ws = new WsClient('/ws/console');
 
-    ws.on('open', () => setConnected(true));
-    ws.on('close', () => setConnected(false));
+    ws.on('open', () => {
+      setConnected(true);
+      setReconnecting(false);
+      setConnectionBlockReason(null);
+    });
+    ws.on(
+      'close',
+      (msg: { code?: number; reason?: string; permanent?: boolean; reconnecting?: boolean }) => {
+        setConnected(false);
+        setReconnecting(Boolean(msg.reconnecting));
+
+        if (msg.permanent) {
+          if (msg.code === 4001) {
+            setConnectionBlockReason('Session expired. Re-authenticate to reconnect the console.');
+          } else if (msg.code === 4003) {
+            setConnectionBlockReason('Console WebSocket origin is not allowed by server policy.');
+          } else if (msg.code === 4008) {
+            setConnectionBlockReason('Too many active console sessions for this account.');
+          } else {
+            setConnectionBlockReason(msg.reason || 'Console connection closed by server policy.');
+          }
+        } else {
+          setConnectionBlockReason(null);
+        }
+      }
+    );
     ws.on('log', (msg: { lines: string[] }) => {
+      setConsoleDegraded(false);
       setLines((prev) => {
         const next = [...prev, ...msg.lines];
         return next.slice(-500); // Keep last 500 lines
@@ -37,7 +65,19 @@ export default function ConsolePage() {
       setLines((prev) => [...prev, `> ${msg.message}`]);
     });
     ws.on('error', (msg: { message?: string }) => {
-      if (msg.message) setLines((prev) => [...prev, `[ERROR] ${msg.message}`]);
+      if (msg.message) {
+        if (msg.message.toLowerCase().includes('degraded') || msg.message.toLowerCase().includes('helper unavailable')) {
+          setConsoleDegraded(true);
+        }
+        setLines((prev) => [...prev, `[ERROR] ${msg.message}`]);
+      }
+    });
+    ws.on('statusChange', (msg: { status?: string }) => {
+      if (msg.status === 'degraded') {
+        setConsoleDegraded(true);
+      } else if (msg.status === 'healthy') {
+        setConsoleDegraded(false);
+      }
     });
 
     ws.connect();
@@ -89,6 +129,16 @@ export default function ConsolePage() {
   };
 
   const isAdmin = user?.role === 'admin';
+  const connectionLabel = connected
+    ? consoleDegraded
+      ? 'Connected (degraded)'
+      : 'Connected'
+    : reconnecting
+      ? 'Reconnecting...'
+      : connectionBlockReason
+        ? 'Connection blocked'
+        : 'Disconnected';
+  const connectionClass = connected ? (consoleDegraded ? 'bg-amber-400' : 'bg-emerald-400 animate-pulse') : reconnecting ? 'bg-amber-400 animate-pulse' : 'bg-red-400';
 
   return (
     <AppShell>
@@ -100,10 +150,11 @@ export default function ConsolePage() {
           </div>
           <div className="flex items-center gap-3">
             {status && <StatusBadge running={status.running} />}
-            <div className={`h-2 w-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
-            <span className="text-xs text-muted-foreground">{connected ? 'Connected' : 'Disconnected'}</span>
+            <div className={`h-2 w-2 rounded-full ${connectionClass}`} />
+            <span className="text-xs text-muted-foreground">{connectionLabel}</span>
           </div>
         </div>
+        {connectionBlockReason && <p className="text-xs text-destructive">{connectionBlockReason}</p>}
 
         <Card className="flex flex-1 flex-col overflow-hidden">
           <CardContent className="flex flex-1 flex-col p-0">

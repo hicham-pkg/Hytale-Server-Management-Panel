@@ -14,6 +14,25 @@ export interface ListBackupsResult {
   helperOffline: boolean;
 }
 
+export type HelperBackupOperationStatus = 'running' | 'succeeded' | 'failed' | 'unknown';
+
+export interface HelperBackupOperationLookup {
+  success: boolean;
+  found: boolean;
+  status?: HelperBackupOperationStatus;
+  phase?: string;
+  resultPayload?: Record<string, unknown> | null;
+  error?: string;
+}
+
+function withOperationId<T extends Record<string, unknown>>(payload: T, operationId?: string): T & { operationId?: string } {
+  if (!operationId) {
+    return payload;
+  }
+
+  return { ...payload, operationId };
+}
+
 async function listBackupsFromDbFallback(): Promise<ListBackupsResult> {
   const db = getDb();
   const rows = await db
@@ -38,9 +57,14 @@ async function listBackupsFromDbFallback(): Promise<ListBackupsResult> {
 
 export async function createBackup(
   label: string | undefined,
-  userId: string
+  userId: string | null,
+  operationId?: string
 ): Promise<{ success: boolean; backup?: BackupMeta; error?: string }> {
-  const result = await callHelper('backup.create', { label }, { timeoutMs: BACKUP_CREATE_TIMEOUT_MS });
+  const result = await callHelper(
+    'backup.create',
+    withOperationId({ label }, operationId),
+    { timeoutMs: BACKUP_CREATE_TIMEOUT_MS }
+  );
   if (!result.success) {
     return { success: false, error: result.error };
   }
@@ -60,7 +84,7 @@ export async function createBackup(
     label: label ?? null,
     sizeBytes: data.sizeBytes,
     sha256: data.sha256,
-    createdBy: userId,
+    createdBy: userId ?? null,
   });
 
   return {
@@ -71,7 +95,7 @@ export async function createBackup(
       label: label ?? null,
       sizeBytes: data.sizeBytes,
       sha256: data.sha256,
-      createdBy: userId,
+      createdBy: userId ?? null,
       createdAt: data.createdAt,
     },
   };
@@ -164,7 +188,8 @@ export async function listBackups(): Promise<ListBackupsResult> {
 }
 
 export async function restoreBackup(
-  backupId: string
+  backupId: string,
+  operationId?: string
 ): Promise<{ success: boolean; safetyBackup?: string; error?: string }> {
   // Try to find the backup by ID in DB first
   const db = getDb();
@@ -204,13 +229,61 @@ export async function restoreBackup(
     }
   }
 
-  const result = await callHelper('backup.restore', { filename }, { timeoutMs: BACKUP_RESTORE_TIMEOUT_MS });
+  const result = await callHelper(
+    'backup.restore',
+    withOperationId({ filename }, operationId),
+    { timeoutMs: BACKUP_RESTORE_TIMEOUT_MS }
+  );
   if (!result.success) {
     return { success: false, error: result.error };
   }
 
   const data = result.data as { safetyBackup?: string };
   return { success: true, safetyBackup: data.safetyBackup };
+}
+
+export async function getBackupOperationStatus(operationId: string): Promise<HelperBackupOperationLookup> {
+  const result = await callHelper('backup.operationStatus', { operationId });
+  if (!result.success) {
+    return { success: false, found: false, error: result.error };
+  }
+
+  const data = result.data as
+    | {
+      found?: boolean;
+      operation?: {
+        status?: unknown;
+        phase?: unknown;
+        result?: unknown;
+        error?: unknown;
+      };
+    }
+    | undefined;
+
+  if (!data || data.found !== true || !data.operation) {
+    return { success: true, found: false };
+  }
+
+  const status = data.operation.status;
+  if (status !== 'running' && status !== 'succeeded' && status !== 'failed' && status !== 'unknown') {
+    return { success: true, found: false };
+  }
+
+  const phase = typeof data.operation.phase === 'string' ? data.operation.phase : undefined;
+  return {
+    success: true,
+    found: true,
+    status,
+    ...(phase ? { phase } : {}),
+    resultPayload:
+      data.operation.result && typeof data.operation.result === 'object'
+        ? (data.operation.result as Record<string, unknown>)
+        : null,
+    error:
+      typeof data.operation.error === 'string'
+        ? data.operation.error
+        : undefined,
+  };
 }
 
 export async function deleteBackup(

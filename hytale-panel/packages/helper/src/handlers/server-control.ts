@@ -125,6 +125,11 @@ interface RuntimeDetectionResult {
   process: ProcessSnapshot | null;
 }
 
+export interface ManagedRuntimeProcess {
+  pid: number;
+  elapsedSeconds: number | null;
+}
+
 function isRuntimeRunning(runtime: RuntimeDetectionResult): boolean {
   return runtime.sessionExists && runtime.process !== null && !runtime.process.state.toUpperCase().includes('Z');
 }
@@ -282,6 +287,18 @@ async function detectTmuxRuntime(config: HelperConfig): Promise<RuntimeDetection
     return { sessionExists: true, process: javaProcess };
   }
   return { sessionExists: true, process: null };
+}
+
+export async function getManagedRuntimeProcess(config: HelperConfig): Promise<ManagedRuntimeProcess | null> {
+  const runtime = await detectTmuxRuntime(config);
+  if (!isRuntimeRunning(runtime) || !runtime.process) {
+    return null;
+  }
+
+  return {
+    pid: runtime.process.pid,
+    elapsedSeconds: runtime.process.elapsedSeconds,
+  };
 }
 
 async function waitForRuntimeState(

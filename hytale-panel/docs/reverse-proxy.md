@@ -4,7 +4,7 @@ The panel API binds to `127.0.0.1:4000` and **must not** be exposed directly to 
 
 For first-run private testing, you can skip the reverse proxy entirely and SSH-tunnel the localhost-bound web port to your workstation.
 
-Backup create/restore endpoints are long-running by design. For any proxy (nginx, Caddy, Cloudflare Tunnel), keep upstream `/api/` timeouts at or above `900s` to avoid client/proxy timeout drift during restore operations.
+Backup create/restore requests are now async (`202 Accepted` + job polling), so they should not require very large upstream request timeouts.
 
 ## Table of Contents
 
@@ -69,6 +69,7 @@ server {
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Cross-Origin-Resource-Policy "same-origin" always;
     add_header X-Permitted-Cross-Domain-Policies "none" always;
+    # CSP is emitted by the Next.js web app response layer.
 
     # Request size limit (for backup labels, etc.)
     client_max_body_size 1m;
@@ -105,8 +106,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 60s;
-        proxy_send_timeout 900s;
-        proxy_read_timeout 900s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
     }
 
     location / {
@@ -125,7 +126,7 @@ server {
 }
 ```
 
-`/api/backups/create` and especially `/api/backups/:id/restore` can run for several minutes on large worlds. Keep upstream `/api/` read/send timeouts at or above `900s` to avoid proxy timeouts while the helper is still working.
+`/api/backups/create` and `/api/backups/:id/restore` enqueue jobs immediately and return `202 Accepted`. Standard API timeouts (for example `120s`) are sufficient; long-running work is tracked through `/api/backups/jobs/:id`.
 
 ### Enable and Get Certificate
 
@@ -260,7 +261,7 @@ sudo systemctl enable --now cloudflared
 
 ### Notes for Cloudflare Tunnel
 
-- Set `TRUST_PROXY=127.0.0.1` in `.env` (tunnel connects locally)
+- Keep `TRUST_PROXY=loopback, linklocal, uniquelocal` (default)
 - WebSocket support is automatic
 - No need to open ports 80/443 on your firewall
 - Cloudflare provides DDoS protection automatically
@@ -304,13 +305,13 @@ The internal container routing still stays `web -> api:4000`; the SSH tunnel onl
 The API uses `TRUST_PROXY` to determine which IP to trust for `X-Forwarded-For` headers. This affects:
 - Rate limiting (per-IP)
 - Audit log IP recording
-- Session IP binding
 
 | Setup | TRUST_PROXY Value |
 |-------|------------------|
-| nginx on same host | `127.0.0.1` |
-| Caddy on same host | `127.0.0.1` |
-| Cloudflare Tunnel | `127.0.0.1` |
+| Default (Docker + local proxy) | `loopback, linklocal, uniquelocal` |
+| nginx on same host (strict override) | `127.0.0.1` |
+| Caddy on same host (strict override) | `127.0.0.1` |
+| Cloudflare Tunnel (strict override) | `127.0.0.1` |
 | nginx on different host | `<nginx-server-ip>` |
 | Behind Cloudflare (direct) | `173.245.48.0/20,103.21.244.0/22,...` (Cloudflare IP ranges) |
 

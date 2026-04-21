@@ -59,6 +59,7 @@ export const HELPER_OPERATIONS = [
   'backup.restore',
   'backup.delete',
   'backup.hash',
+  'backup.operationStatus',
   'stats.system',
   'stats.process',
 ] as const;

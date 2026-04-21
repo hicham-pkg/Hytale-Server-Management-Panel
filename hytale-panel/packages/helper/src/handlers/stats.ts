@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import { safeExec } from '../utils/command';
 import type { HelperConfig } from '../config';
+import { getManagedRuntimeProcess } from './server-control';
 
 export interface SystemStatsResult {
   cpuUsagePercent: number;
@@ -19,19 +20,69 @@ export interface ProcessStatsResult {
   uptime: string | null;
 }
 
+interface CpuSnapshot {
+  idle: number;
+  total: number;
+}
+
+let previousCpuSnapshot: CpuSnapshot | null = null;
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 100) return 100;
+  return Math.round(value);
+}
+
+async function readCpuSnapshot(): Promise<CpuSnapshot> {
+  const statContent = await fs.readFile('/proc/stat', 'utf-8');
+  const cpuLine = statContent.split('\n')[0] ?? '';
+  const cpuParts = cpuLine
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((value) => Number.isFinite(value));
+
+  const idle = (cpuParts[3] ?? 0) + (cpuParts[4] ?? 0);
+  const total = cpuParts.reduce((sum, value) => sum + value, 0);
+
+  return { idle, total };
+}
+
+function computeCpuUsagePercent(previous: CpuSnapshot, current: CpuSnapshot): number {
+  const deltaTotal = current.total - previous.total;
+  const deltaIdle = current.idle - previous.idle;
+  if (deltaTotal <= 0) {
+    return 0;
+  }
+
+  const usage = ((deltaTotal - deltaIdle) / deltaTotal) * 100;
+  return clampPercent(usage);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Get system-level stats from /proc and df.
  */
 export async function getSystemStats(): Promise<{ success: boolean; stats?: SystemStatsResult; error?: string }> {
   try {
-    // CPU usage from /proc/stat (snapshot-based approximation)
-    const statContent = await fs.readFile('/proc/stat', 'utf-8');
-    const cpuLine = statContent.split('\n')[0];
-    const cpuParts = cpuLine.split(/\s+/).slice(1).map(Number);
-    const idle = cpuParts[3] + (cpuParts[4] || 0);
-    const total = cpuParts.reduce((a, b) => a + b, 0);
-    // This is a rough estimate; for accurate CPU, we'd need two samples
-    const cpuUsagePercent = total > 0 ? Math.round(((total - idle) / total) * 100) : 0;
+    const currentCpuSnapshot = await readCpuSnapshot();
+    let cpuUsagePercent = 0;
+    if (previousCpuSnapshot) {
+      cpuUsagePercent = computeCpuUsagePercent(previousCpuSnapshot, currentCpuSnapshot);
+      previousCpuSnapshot = currentCpuSnapshot;
+    } else {
+      // First invocation has no prior sample; take a short interval sample
+      // so we still report a delta-based CPU percentage.
+      await sleep(250);
+      const secondSample = await readCpuSnapshot();
+      cpuUsagePercent = computeCpuUsagePercent(currentCpuSnapshot, secondSample);
+      previousCpuSnapshot = secondSample;
+    }
 
     // Memory from /proc/meminfo
     const memContent = await fs.readFile('/proc/meminfo', 'utf-8');
@@ -76,16 +127,15 @@ export async function getSystemStats(): Promise<{ success: boolean; stats?: Syst
  */
 export async function getProcessStats(config: HelperConfig): Promise<{ success: boolean; stats?: ProcessStatsResult; error?: string }> {
   try {
-    // Find PID
-    const pgrepResult = await safeExec('/usr/bin/pgrep', ['-f', 'hytale']);
-    if (pgrepResult.exitCode !== 0 || !pgrepResult.stdout.trim()) {
+    const runtime = await getManagedRuntimeProcess(config);
+    if (!runtime) {
       return {
         success: true,
         stats: { pid: null, cpuPercent: null, memoryMb: null, uptime: null },
       };
     }
 
-    const pid = parseInt(pgrepResult.stdout.trim().split('\n')[0], 10);
+    const pid = runtime.pid;
 
     // Get process stats via ps
     const psResult = await safeExec('/usr/bin/ps', [

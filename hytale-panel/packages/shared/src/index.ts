@@ -5,7 +5,6 @@ export * from './schemas/whitelist';
 export * from './schemas/bans';
 export * from './schemas/backup';
 export * from './schemas/console';
-export * from './schemas/settings';
 export * from './types/models';
 export * from './types/helper';
 export * from './types/ws';

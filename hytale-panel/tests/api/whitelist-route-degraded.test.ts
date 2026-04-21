@@ -36,6 +36,10 @@ vi.mock('../../packages/api/src/middleware/require-role', () => ({
 describe('whitelist routes degraded helper handling', () => {
   beforeEach(() => {
     whitelistServiceMock.getWhitelist.mockReset();
+    whitelistServiceMock.addPlayer.mockReset();
+    whitelistServiceMock.removePlayerOnline.mockReset();
+    whitelistServiceMock.removePlayerOffline.mockReset();
+    whitelistServiceMock.toggleWhitelist.mockReset();
     serverServiceMock.getServerStatus.mockReset();
     auditServiceMock.logAudit.mockReset();
     auditServiceMock.logAudit.mockResolvedValue(undefined);
@@ -73,6 +77,69 @@ describe('whitelist routes degraded helper handling', () => {
         degraded: true,
         dependency: 'helper',
       },
+    });
+
+    await app.close();
+  });
+
+  it('returns 409 when whitelist file read fails with a domain error', async () => {
+    whitelistServiceMock.getWhitelist.mockResolvedValue({
+      success: false,
+      enabled: false,
+      list: [],
+      error: 'Whitelist file is invalid JSON',
+    });
+
+    const { whitelistRoutes } = await import('../../packages/api/src/routes/whitelist.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(whitelistRoutes);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/whitelist',
+    });
+
+    expect(serverServiceMock.getServerStatus).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      success: false,
+      error: 'Whitelist file is invalid JSON',
+    });
+
+    await app.close();
+  });
+
+  it('returns 409 when whitelist add fails due to runtime preconditions', async () => {
+    serverServiceMock.getServerStatus.mockResolvedValue({ running: false });
+    whitelistServiceMock.addPlayer.mockResolvedValue({
+      success: false,
+      message:
+        'Cannot add players by name while the server is stopped. The whitelist file stores UUIDs, and name-to-UUID resolution requires a running server. Start the server first, then add the player.',
+    });
+
+    const { whitelistRoutes } = await import('../../packages/api/src/routes/whitelist.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(whitelistRoutes);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/whitelist/add',
+      payload: { name: 'TestPlayer' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      success: false,
+      data: {
+        message:
+          'Cannot add players by name while the server is stopped. The whitelist file stores UUIDs, and name-to-UUID resolution requires a running server. Start the server first, then add the player.',
+      },
+      error:
+        'Cannot add players by name while the server is stopped. The whitelist file stores UUIDs, and name-to-UUID resolution requires a running server. Start the server first, then add the player.',
     });
 
     await app.close();

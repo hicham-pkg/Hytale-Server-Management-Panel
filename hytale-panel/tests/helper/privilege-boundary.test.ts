@@ -39,12 +39,12 @@ describe('Helper Privilege Boundary — Allowlisted Operations', () => {
     'server.sendCommand', 'logs.read', 'console.capturePane',
     'whitelist.read', 'whitelist.write', 'bans.read', 'bans.write',
     'backup.create', 'backup.list', 'backup.restore', 'backup.delete',
-    'backup.hash',
+    'backup.hash', 'backup.operationStatus',
     'stats.system', 'stats.process',
   ];
 
-  it('should define exactly 19 allowed operations', () => {
-    expect(HELPER_OPERATIONS).toHaveLength(19);
+  it('should define exactly 20 allowed operations', () => {
+    expect(HELPER_OPERATIONS).toHaveLength(20);
   });
 
   for (const op of expectedOps) {

@@ -17,7 +17,7 @@ const ConfigSchema = z.object({
   csrfSecret: z.string().min(32),
   helperSocketPath: z.string().default('/run/hytale-helper/hytale-helper.sock'),
   helperHmacSecret: z.string().min(32),
-  trustProxy: z.string().default('127.0.0.1'),
+  trustProxy: z.string().default('loopback, linklocal, uniquelocal'),
   corsOrigin: z.string().default(''),
   wsAllowedOrigins: z.string().default(''),
   maxFailedLogins: z.coerce.number().default(10),

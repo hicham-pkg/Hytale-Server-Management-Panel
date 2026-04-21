@@ -25,7 +25,7 @@ This panel is designed for a **single VPS, small admin team** (1–3 users) scen
 | **WebSocket auth bypass** | Session cookie validated on WS upgrade; explicit `WS_ALLOWED_ORIGINS`; message and connection rate limits |
 | **Privilege escalation** | HMAC-signed helper requests with timestamp; local-only root helper with systemd sandbox; direct allowlisted `systemctl`/`journalctl` only; non-root Docker |
 | **Backup restore abuse** | Server-stopped precondition; automatic safety snapshot before restore |
-| **XSS via logs** | ANSI stripping; React default escaping; CSP `script-src 'self'` |
+| **XSS via logs** | ANSI stripping; React default escaping; no `dangerouslySetInnerHTML`; baseline CSP on web responses (currently allows `'unsafe-inline'` scripts for Next.js runtime compatibility) |
 | **Docker escape** | Non-root container; no `--privileged`; only Unix socket mounted |
 | **Replay attacks** | HMAC includes timestamp (±30s window) |
 | **Log injection** | HTML-escape all log lines; render as plain text |

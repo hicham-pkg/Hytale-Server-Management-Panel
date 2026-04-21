@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { BackupIdentifierSchema, CreateBackupSchema } from '@hytale-panel/shared';
 import * as backupService from '../services/backup.service';
+import * as backupJobService from '../services/backup-job.service';
 import { logAudit } from '../services/audit.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
@@ -39,27 +40,18 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const body = CreateBackupSchema.parse(request.body ?? {});
-      let result;
-      try {
-        result = await backupService.createBackup(body.label, request.currentUser!.id);
-      } catch (err) {
-        return sendHelperDegraded(reply, err);
-      }
+      const job = await backupJobService.enqueueCreateBackupJob(body.label, request.currentUser!.id);
 
       await logAudit({
         userId: request.currentUser!.id,
-        action: 'backup.create',
-        target: result.backup?.filename,
+        action: 'backup.create.queued',
+        target: job.id,
         ipAddress: request.ip,
-        success: result.success,
-        details: { label: body.label, sha256: result.backup?.sha256 },
+        success: true,
+        details: { label: body.label ?? null },
       });
 
-      if (!result.success) {
-        return reply.status(500).send({ success: false, error: result.error });
-      }
-
-      return reply.send({ success: true, data: { backup: result.backup } });
+      return reply.status(202).send({ success: true, data: { job } });
     }
   );
 
@@ -68,30 +60,18 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [requireAuth, requireRole('admin')] },
     async (request, reply) => {
       const params = { id: BackupIdentifierSchema.parse((request.params as { id: string }).id) };
-      let result;
-      try {
-        result = await backupService.restoreBackup(params.id);
-      } catch (err) {
-        return sendHelperDegraded(reply, err);
-      }
+      const job = await backupJobService.enqueueRestoreBackupJob(params.id, request.currentUser!.id);
 
       await logAudit({
         userId: request.currentUser!.id,
-        action: 'backup.restore',
-        target: params.id,
+        action: 'backup.restore.queued',
+        target: job.id,
         ipAddress: request.ip,
-        success: result.success,
-        details: { safetyBackup: result.safetyBackup },
-      });
-
-      if (!result.success) {
-        return reply.status(400).send({ success: false, error: result.error });
-      }
-
-      return reply.send({
         success: true,
-        data: { message: 'Backup restored successfully', safetyBackup: result.safetyBackup },
+        details: { backupId: params.id },
       });
+
+      return reply.status(202).send({ success: true, data: { job } });
     }
   );
 

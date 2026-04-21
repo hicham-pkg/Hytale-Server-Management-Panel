@@ -11,7 +11,12 @@ const banServiceMock = vi.hoisted(() => ({
   removeBan: vi.fn(),
 }));
 
+const serverServiceMock = vi.hoisted(() => ({
+  getServerStatus: vi.fn(),
+}));
+
 vi.mock('../../packages/api/src/services/ban.service', () => banServiceMock);
+vi.mock('../../packages/api/src/services/server.service', () => serverServiceMock);
 vi.mock('../../packages/api/src/middleware/require-auth', () => ({
   requireAuth: async (request: { currentUser?: { id: number; role: string } }) => {
     request.currentUser = { id: 1, role: 'admin' };
@@ -29,6 +34,7 @@ describe('ban routes degraded helper handling', () => {
     banServiceMock.getBans.mockReset();
     banServiceMock.addBan.mockReset();
     banServiceMock.removeBan.mockReset();
+    serverServiceMock.getServerStatus.mockReset();
   });
 
   it('returns degraded helper state for ban list reads when helper is unavailable', async () => {
@@ -57,6 +63,37 @@ describe('ban routes degraded helper handling', () => {
         degraded: true,
         dependency: 'helper',
       },
+    });
+
+    await app.close();
+  });
+
+  it('returns 409 when live ban command fails while server is running', async () => {
+    serverServiceMock.getServerStatus.mockResolvedValue({ running: true });
+    banServiceMock.addBan.mockResolvedValue({
+      success: false,
+      message: 'Server is running; live ban command failed. File was not modified.',
+    });
+
+    const { banRoutes } = await import('../../packages/api/src/routes/ban.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(banRoutes);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/bans/add',
+      payload: { name: 'TestPlayer', reason: '' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      success: false,
+      data: {
+        message: 'Server is running; live ban command failed. File was not modified.',
+      },
+      error: 'Server is running; live ban command failed. File was not modified.',
     });
 
     await app.close();

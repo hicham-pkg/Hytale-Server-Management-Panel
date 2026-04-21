@@ -29,7 +29,13 @@ export async function consoleRoutes(fastify: FastifyInstance): Promise<void> {
 
       try {
         const result = await consoleService.captureConsoleOutput(query.lines);
-        return reply.send({ success: result.success, data: { lines: result.lines }, error: result.error });
+        return reply
+          .status(result.success ? 200 : 409)
+          .send({
+            success: result.success,
+            data: { lines: result.lines },
+            error: result.success ? undefined : (result.error ?? 'Console capture failed'),
+          });
       } catch (err) {
         return sendHelperDegraded(reply, err);
       }
@@ -47,7 +53,13 @@ export async function consoleRoutes(fastify: FastifyInstance): Promise<void> {
 
       try {
         const result = await consoleService.readLogs(query.lines, query.since);
-        return reply.send({ success: result.success, data: { lines: result.lines }, error: result.error });
+        return reply
+          .status(result.success ? 200 : 409)
+          .send({
+            success: result.success,
+            data: { lines: result.lines },
+            error: result.success ? undefined : (result.error ?? 'Log read failed'),
+          });
       } catch (err) {
         return sendHelperDegraded(reply, err);
       }

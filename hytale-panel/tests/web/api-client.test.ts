@@ -66,4 +66,41 @@ describe('web api client', () => {
       dependency: 'helper',
     });
   });
+
+  it('preserves 202 Accepted success payloads for async job enqueue routes', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 202,
+        headers: {
+          get: () => 'application/json',
+        },
+        text: async () => JSON.stringify({
+          success: true,
+          data: {
+            job: {
+              id: '550e8400-e29b-41d4-a716-4466554400aa',
+              type: 'create',
+              status: 'queued',
+            },
+          },
+        }),
+      })
+    );
+
+    const result = await apiRequest('/api/backups/create', { method: 'POST', body: '{}' });
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        job: {
+          id: '550e8400-e29b-41d4-a716-4466554400aa',
+          type: 'create',
+          status: 'queued',
+        },
+      },
+      statusCode: 202,
+    });
+  });
 });

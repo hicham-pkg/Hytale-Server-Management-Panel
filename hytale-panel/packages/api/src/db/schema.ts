@@ -53,6 +53,26 @@ export const backupMetadata = pgTable('backup_metadata', {
   createdAtIdx: index('idx_backup_metadata_created_at').on(table.createdAt),
 }));
 
+export const backupJobs = pgTable('backup_jobs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  type: varchar('type', { length: 20 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull(),
+  requestPayload: jsonb('request_payload').notNull(),
+  resultPayload: jsonb('result_payload'),
+  error: text('error'),
+  requestedBy: uuid('requested_by').references(() => users.id, { onDelete: 'set null' }),
+  workerId: varchar('worker_id', { length: 100 }),
+  leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+  lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  statusCreatedAtIdx: index('idx_backup_jobs_status_created_at').on(table.status, table.createdAt),
+  requestedByCreatedAtIdx: index('idx_backup_jobs_requested_by_created_at').on(table.requestedBy, table.createdAt),
+}));
+
 export const crashEvents = pgTable('crash_events', {
   id: uuid('id').defaultRandom().primaryKey(),
   severity: varchar('severity', { length: 20 }).notNull(),
@@ -67,6 +87,14 @@ export const crashEvents = pgTable('crash_events', {
   severityIdx: index('idx_crash_events_severity').on(table.severity),
   archivedAtIdx: index('idx_crash_events_archived_at').on(table.archivedAt),
 }));
+
+export const crashScanState = pgTable('crash_scan_state', {
+  id: integer('id').primaryKey().default(1),
+  cursorSince: timestamp('cursor_since', { withTimezone: true }),
+  lastScannedAt: timestamp('last_scanned_at', { withTimezone: true }),
+  lastLineCount: integer('last_line_count').default(0).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const settings = pgTable('settings', {
   key: varchar('key', { length: 100 }).primaryKey(),

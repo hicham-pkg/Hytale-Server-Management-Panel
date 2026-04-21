@@ -6,8 +6,8 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/hooks/use-auth';
-import { apiGet, apiPut, apiPost } from '@/lib/api-client';
-import { Settings, Users, Key } from 'lucide-react';
+import { apiGet, apiPost } from '@/lib/api-client';
+import { Users, Key } from 'lucide-react';
 
 interface UserInfo {
   id: string;

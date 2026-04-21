@@ -32,6 +32,7 @@ export interface ServerStatusResponse extends ServerStatus {
 export interface WhitelistResponse {
   enabled: boolean;
   list: string[];
+  serverRunning: boolean;
 }
 
 export interface BanListResponse {
@@ -40,6 +41,35 @@ export interface BanListResponse {
 
 export interface BackupListResponse {
   backups: BackupMeta[];
+  helperOffline?: boolean;
+}
+
+export type BackupJobType = 'create' | 'restore';
+export type BackupJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'interrupted';
+
+export interface BackupJob {
+  id: string;
+  type: BackupJobType;
+  status: BackupJobStatus;
+  requestPayload: Record<string, unknown>;
+  resultPayload: Record<string, unknown> | null;
+  error: string | null;
+  requestedBy: string | null;
+  workerId: string | null;
+  leaseExpiresAt: string | null;
+  lastHeartbeatAt: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface BackupJobResponse {
+  job: BackupJob;
+}
+
+export interface BackupJobListResponse {
+  jobs: BackupJob[];
 }
 
 export interface CrashListResponse {

@@ -56,6 +56,10 @@ function createMockSocket(): MockSocket {
   };
 }
 
+function sentPayloads(socket: MockSocket): any[] {
+  return socket.send.mock.calls.map(([payload]) => JSON.parse(payload));
+}
+
 async function loadWsHandler() {
   vi.resetModules();
   const { consoleWsHandler } = await import('../../packages/api/src/ws/console.ws');
@@ -179,6 +183,172 @@ describe('Console WebSocket Security', () => {
     expect(sendConsoleCommandMock).not.toHaveBeenCalled();
     expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'error', message: 'Session expired' }));
     expect(socket.close).toHaveBeenCalledWith(4001, 'Unauthorized');
+  });
+
+  it('returns a specific parse error for malformed JSON messages', async () => {
+    getConfigMock.mockReturnValue({
+      nodeEnv: 'production',
+      wsAllowedOrigins: 'https://panel.example.com',
+    });
+    validateSessionMock.mockResolvedValue({
+      valid: true,
+      user: { id: 'user-1', username: 'admin', role: 'admin' },
+    });
+
+    const { handler } = await loadWsHandler();
+    const socket = createMockSocket();
+
+    await handler(socket, {
+      headers: { origin: 'https://panel.example.com' },
+      cookies: { hytale_session: 'session-1' },
+      ip: '127.0.0.1',
+    });
+
+    await socket.emit('message', Buffer.from('{invalid-json'));
+
+    expect(sentPayloads(socket)).toContainEqual({ type: 'error', message: 'Malformed WebSocket JSON payload' });
+    expect(sentPayloads(socket)).not.toContainEqual({ type: 'error', message: 'Invalid message format' });
+  });
+
+  it('returns a specific validation error for malformed WebSocket payloads', async () => {
+    getConfigMock.mockReturnValue({
+      nodeEnv: 'production',
+      wsAllowedOrigins: 'https://panel.example.com',
+    });
+    validateSessionMock.mockResolvedValue({
+      valid: true,
+      user: { id: 'user-1', username: 'admin', role: 'admin' },
+    });
+
+    const { handler } = await loadWsHandler();
+    const socket = createMockSocket();
+
+    await handler(socket, {
+      headers: { origin: 'https://panel.example.com' },
+      cookies: { hytale_session: 'session-1' },
+      ip: '127.0.0.1',
+    });
+
+    await socket.emit('message', Buffer.from(JSON.stringify({ type: 'command', data: '' })));
+
+    expect(sentPayloads(socket)).toContainEqual({ type: 'error', message: 'Malformed WebSocket message payload' });
+  });
+
+  it('marks console stream degraded when helper capture is unavailable', async () => {
+    getConfigMock.mockReturnValue({
+      nodeEnv: 'production',
+      wsAllowedOrigins: 'https://panel.example.com',
+    });
+    validateSessionMock.mockResolvedValue({
+      valid: true,
+      user: { id: 'user-1', username: 'admin', role: 'admin' },
+    });
+    const { handler } = await loadWsHandler();
+    const { HelperUnavailableError } = await import('../../packages/api/src/services/helper-client');
+    captureConsoleOutputMock.mockRejectedValue(
+      new HelperUnavailableError('console.capturePane', 'helper socket unavailable')
+    );
+    const socket = createMockSocket();
+
+    await handler(socket, {
+      headers: { origin: 'https://panel.example.com' },
+      cookies: { hytale_session: 'session-1' },
+      ip: '127.0.0.1',
+    });
+
+    await socket.emit('message', Buffer.from(JSON.stringify({ type: 'subscribe' })));
+
+    const payloads = sentPayloads(socket);
+    expect(payloads).toContainEqual({ type: 'statusChange', status: 'degraded' });
+    expect(payloads).toContainEqual({
+      type: 'error',
+      message: 'Helper unavailable: console capture temporarily degraded',
+    });
+    expect(payloads).not.toContainEqual({ type: 'error', message: 'Malformed WebSocket message payload' });
+
+    await socket.emit('close');
+  });
+
+  it('returns explicit command execution errors for runtime failures', async () => {
+    getConfigMock.mockReturnValue({
+      nodeEnv: 'production',
+      wsAllowedOrigins: 'https://panel.example.com',
+    });
+    validateSessionMock.mockResolvedValue({
+      valid: true,
+      user: { id: 'user-1', username: 'admin', role: 'admin' },
+    });
+    sendConsoleCommandMock.mockRejectedValue(new Error('tmux write failed'));
+
+    const { handler } = await loadWsHandler();
+    const socket = createMockSocket();
+
+    await handler(socket, {
+      headers: { origin: 'https://panel.example.com' },
+      cookies: { hytale_session: 'session-1' },
+      ip: '127.0.0.1',
+    });
+
+    await socket.emit('message', Buffer.from(JSON.stringify({ type: 'command', data: 'save-all' })));
+
+    expect(sentPayloads(socket)).toContainEqual({
+      type: 'error',
+      message: 'Command execution failed: tmux write failed',
+    });
+    expect(sentPayloads(socket)).toContainEqual({
+      type: 'commandResult',
+      success: false,
+      message: 'Command execution failed: tmux write failed',
+    });
+  });
+
+  it('does not overlap capture polling when a prior poll is still in-flight', async () => {
+    vi.useFakeTimers();
+
+    getConfigMock.mockReturnValue({
+      nodeEnv: 'production',
+      wsAllowedOrigins: 'https://panel.example.com',
+    });
+    validateSessionMock.mockResolvedValue({
+      valid: true,
+      user: { id: 'user-1', username: 'admin', role: 'admin' },
+    });
+
+    let resolveFirstPoll:
+      | ((value: { success: boolean; lines: string[] }) => void)
+      | null = null;
+    captureConsoleOutputMock
+      .mockResolvedValueOnce({ success: true, lines: ['line-1'] })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstPoll = resolve as (value: { success: boolean; lines: string[] }) => void;
+          })
+      )
+      .mockResolvedValue({ success: true, lines: ['line-1', 'line-2'] });
+
+    const { handler } = await loadWsHandler();
+    const socket = createMockSocket();
+
+    await handler(socket, {
+      headers: { origin: 'https://panel.example.com' },
+      cookies: { hytale_session: 'session-1' },
+      ip: '127.0.0.1',
+    });
+
+    await socket.emit('message', Buffer.from(JSON.stringify({ type: 'subscribe' })));
+    await vi.advanceTimersByTimeAsync(WS_CAPTURE_POLL_INTERVAL_MS);
+
+    expect(captureConsoleOutputMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(WS_CAPTURE_POLL_INTERVAL_MS * 4);
+    expect(captureConsoleOutputMock).toHaveBeenCalledTimes(2);
+
+    resolveFirstPoll?.({ success: true, lines: ['line-1', 'line-2'] });
+    await vi.advanceTimersByTimeAsync(WS_CAPTURE_POLL_INTERVAL_MS);
+    expect(captureConsoleOutputMock).toHaveBeenCalledTimes(3);
+
+    await socket.emit('close');
   });
 
   it('streams appended lines when the capture window stays at 200 lines', async () => {

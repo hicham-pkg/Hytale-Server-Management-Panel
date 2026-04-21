@@ -26,10 +26,32 @@ interface BackupsResponse {
   helperOffline?: boolean;
 }
 
+type BackupJobType = 'create' | 'restore';
+type BackupJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'interrupted';
+
+interface BackupJob {
+  id: string;
+  type: BackupJobType;
+  status: BackupJobStatus;
+  requestPayload: Record<string, unknown>;
+  resultPayload: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+interface BackupJobResponse {
+  job: BackupJob;
+}
+
+const TERMINAL_JOB_STATUSES: BackupJobStatus[] = ['succeeded', 'failed', 'interrupted'];
+
 export default function BackupsPage() {
   const { user } = useAuth();
   const [backups, setBackups] = useState<BackupMeta[]>([]);
   const [helperOffline, setHelperOffline] = useState(false);
+  const [activeJob, setActiveJob] = useState<BackupJob | null>(null);
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -54,6 +76,71 @@ export default function BackupsPage() {
     fetchBackups();
   }, []);
 
+  const handleTerminalJob = async (job: BackupJob) => {
+    if (job.status === 'succeeded') {
+      if (job.type === 'create') {
+        const backup = (job.resultPayload as { backup?: BackupMeta } | null)?.backup;
+        setMessage(
+          backup
+            ? `Backup created successfully: ${backup.filename}`
+            : 'Backup created successfully'
+        );
+      } else {
+        const safetyBackup = (job.resultPayload as { safetyBackup?: string | null } | null)?.safetyBackup;
+        setMessage(
+          safetyBackup
+            ? `Backup restored. Safety snapshot: ${safetyBackup}`
+            : 'Backup restored successfully'
+        );
+      }
+      await fetchBackups();
+      return;
+    }
+
+    setError(job.error || `Backup job ${job.status}`);
+  };
+
+  const activeJobId = activeJob?.id;
+  const activeJobStatus = activeJob?.status;
+
+  useEffect(() => {
+    if (!activeJobId || !activeJobStatus || TERMINAL_JOB_STATUSES.includes(activeJobStatus)) {
+      return;
+    }
+
+    let canceled = false;
+    const poll = async () => {
+      const res = await apiGet<BackupJobResponse>(`/api/backups/jobs/${activeJobId}`);
+      if (canceled) {
+        return;
+      }
+
+      if (!res.success || !res.data?.job) {
+        setError(res.error || 'Failed to fetch backup job status');
+        if (res.degraded) {
+          setHelperOffline(true);
+        }
+        return;
+      }
+
+      setActiveJob(res.data.job);
+      if (TERMINAL_JOB_STATUSES.includes(res.data.job.status)) {
+        await handleTerminalJob(res.data.job);
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 2000);
+
+    void poll();
+
+    return () => {
+      canceled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeJobId, activeJobStatus]);
+
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     setActionLoading(true);
@@ -61,11 +148,11 @@ export default function BackupsPage() {
     setMessage('');
 
     const body = label.trim() ? { label: label.trim() } : {};
-    const res = await apiPost<{ backup: BackupMeta }>('/api/backups/create', body);
-    if (res.success) {
-      setMessage('Backup created successfully');
+    const res = await apiPost<BackupJobResponse>('/api/backups/create', body);
+    if (res.success && res.data?.job) {
+      setMessage('Backup creation queued');
       setLabel('');
-      fetchBackups();
+      setActiveJob(res.data.job);
     } else {
       setError(res.error || 'Failed to create backup');
       if (res.degraded) {
@@ -80,12 +167,10 @@ export default function BackupsPage() {
     setError('');
     setMessage('');
 
-    const res = await apiPost<{ message: string; safetyBackup?: string }>(`/api/backups/${id}/restore`);
-    if (res.success) {
-      setMessage(
-        `Backup restored. ${res.data?.safetyBackup ? `Safety snapshot: ${res.data.safetyBackup}` : ''}`
-      );
-      fetchBackups();
+    const res = await apiPost<BackupJobResponse>(`/api/backups/${id}/restore`);
+    if (res.success && res.data?.job) {
+      setMessage('Backup restore queued');
+      setActiveJob(res.data.job);
     } else {
       setError(res.error || 'Failed to restore backup');
       if (res.degraded) {
@@ -114,6 +199,7 @@ export default function BackupsPage() {
   };
 
   const isAdmin = user?.role === 'admin';
+  const jobInProgress = activeJob !== null && !TERMINAL_JOB_STATUSES.includes(activeJob.status);
 
   return (
     <AppShell>
@@ -128,6 +214,24 @@ export default function BackupsPage() {
         {helperOffline && (
           <div className="rounded-md border border-yellow-800 bg-yellow-900/20 p-3 text-sm text-yellow-300">
             Helper dependency is degraded. Backup actions may be unavailable until helper connectivity is restored.
+          </div>
+        )}
+        {activeJob && (
+          <div className="rounded-md border border-slate-700 bg-slate-900/40 p-3 text-sm text-slate-200">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold">Current job:</span>
+              <span className="rounded border border-slate-600 px-2 py-0.5 font-mono text-xs">{activeJob.id}</span>
+              <span className="rounded bg-secondary px-2 py-0.5 text-xs uppercase">{activeJob.type}</span>
+              <span className="rounded border border-slate-600 px-2 py-0.5 text-xs uppercase">{activeJob.status}</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Queued at {formatDate(activeJob.createdAt)}
+              {activeJob.startedAt ? ` • Started at ${formatDate(activeJob.startedAt)}` : ''}
+              {activeJob.finishedAt ? ` • Finished at ${formatDate(activeJob.finishedAt)}` : ''}
+            </p>
+            {activeJob.error && (
+              <p className="mt-2 text-xs text-red-400">{activeJob.error}</p>
+            )}
           </div>
         )}
 
@@ -146,7 +250,7 @@ export default function BackupsPage() {
                 />
                 <Button
                   type="submit"
-                  disabled={actionLoading || helperOffline}
+                  disabled={actionLoading || helperOffline || jobInProgress}
                   title={helperOffline ? 'Helper is degraded — backup creation is unavailable' : undefined}
                 >
                   <Plus className="mr-1 h-4 w-4" />
@@ -205,7 +309,7 @@ export default function BackupsPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={actionLoading || backup.helperOffline}
+                            disabled={actionLoading || jobInProgress || backup.helperOffline}
                             title={backup.helperOffline ? 'Helper is offline — restore is unavailable' : undefined}
                           >
                             <RotateCcw className="mr-1 h-3 w-3" />
@@ -222,7 +326,7 @@ export default function BackupsPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            disabled={actionLoading || backup.helperOffline}
+                            disabled={actionLoading || jobInProgress || backup.helperOffline}
                             className="text-red-400"
                             title={backup.helperOffline ? 'Helper is offline — delete is unavailable' : undefined}
                           >

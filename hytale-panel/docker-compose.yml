@@ -76,7 +76,7 @@ services:
       CSRF_SECRET: ${CSRF_SECRET}
       HELPER_SOCKET_PATH: /run/hytale-helper/hytale-helper.sock
       HELPER_HMAC_SECRET: ${HELPER_HMAC_SECRET}
-      TRUST_PROXY: ${TRUST_PROXY:-127.0.0.1}
+      TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
       MAX_FAILED_LOGINS: ${MAX_FAILED_LOGINS:-10}

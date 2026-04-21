@@ -27,6 +27,12 @@
 
 This document describes the architecture for a self-hosted, production-grade web panel to manage a personal Hytale game server running on Ubuntu. The panel prioritizes **security and reliability** over visual polish. It uses a **privilege-separated architecture** with four trust zones: browser, API backend, local privileged helper, and host OS.
 
+> Current-state note: this document includes some historical design sections.
+> Treat route contracts and runtime behavior in `README.md` plus `packages/*/src`
+> as the source of truth. In particular, the legacy `/api/settings` runtime
+> settings endpoint is now deprecated (`410 Gone`) and operational settings are
+> environment-driven.
+
 **Key architectural decisions:**
 - **systemd + tmux** for game server management (enables live console I/O)
 - **Local-only privileged helper service** (not sudoers) for host operations
@@ -44,7 +50,7 @@ This document describes the architecture for a self-hosted, production-grade web
 2. **Privilege separation** — The panel backend must not run as root, yet it needs to control systemd services and read journalctl. Solution: a dedicated local-only helper service running as root with a strict systemd sandbox, HMAC-authenticated Unix socket, and allowlisted host operations only.
 3. **Backup/restore safety** — Restoring while the server is running could corrupt worlds. Solution: enforce server-stopped precondition and automatic safety snapshots.
 4. **Security of WebSocket** — Must authenticate WS connections with the same session tokens as HTTP, and rate-limit.
-5. **Path traversal prevention** — Backup download/restore must be confined to an allowlist of directories.
+5. **Path traversal prevention** — Backup restore/delete/list operations must be confined to allowlisted directories.
 
 ### Technology Choices
 
@@ -87,7 +93,7 @@ This document describes the architecture for a self-hosted, production-grade web
 │  ┌─────────▼───────────────────────────▼───────────┐               │
 │  │  Fastify API Server (Port 4000)                  │               │
 │  │  - REST endpoints                                │               │
-│  │  - WebSocket /ws/logs, /ws/console               │               │
+│  │  - WebSocket /ws/console                          │               │
 │  │  - Session management                            │               │
 │  │  - Audit logging                                 │               │
 │  │  - Zod validation on all inputs                  │               │
@@ -311,24 +317,24 @@ The helper service provides a clean, auditable, validatable boundary between the
 
 | Vector | Mitigation |
 |--------|-----------|
-| Backup restore path | `path.resolve()` + verify result starts with `/opt/hytale-backups/`; reject symlinks |
+| Backup restore path | `path.resolve()` + verify result stays inside the backup root; reject symlinks/path traversal |
 | Whitelist/ban file path | Hardcoded in config; never derived from user input |
-| Backup download | Serve from allowlisted directory only; filename validated against `^[a-zA-Z0-9_\-\.]+\.tar\.gz$` |
+| Backup ID lookup/delete | IDs are validated and resolved against known backup metadata/files only |
 
 ### 8.3 CSRF
 
 | Vector | Mitigation |
 |--------|-----------|
 | State-changing POST/PUT/DELETE | SameSite=Strict cookies; CSRF token in custom header (`X-CSRF-Token`) validated server-side |
-| WebSocket | Initial auth message required with session token; origin header validation |
+| WebSocket | Session cookie validated on connect and on privileged messages; origin header validation |
 
 ### 8.4 Session Theft
 
 | Vector | Mitigation |
 |--------|-----------|
-| Cookie theft via XSS | HttpOnly, Secure, SameSite=Strict; CSP headers block inline scripts |
+| Cookie theft via XSS | HttpOnly, Secure, SameSite=Strict; strict output escaping and no `dangerouslySetInnerHTML`; baseline CSP headers on web responses |
 | Session fixation | Regenerate session ID on login |
-| Session hijacking | Bind session to IP (configurable); short expiry (4h default); sliding window |
+| Session hijacking | Short expiry (4h default absolute + role-based idle timeout); session rotation on TOTP completion |
 
 ### 8.5 Brute Force
 
@@ -369,7 +375,7 @@ The helper service provides a clean, auditable, validatable boundary between the
 | Vector | Mitigation |
 |--------|-----------|
 | Whitelist.json injection | Parse with JSON.parse; validate schema with Zod; reject if invalid |
-| Log injection / XSS | All log output HTML-escaped before rendering; use React's default escaping; CSP blocks inline scripts |
+| Log injection / XSS | All log output HTML-escaped before rendering; use React's default escaping; no `dangerouslySetInnerHTML`; baseline CSP headers on web responses |
 | Config file tampering | Helper validates all file writes against schemas before writing |
 
 ### 8.10 Log Injection / XSS
@@ -378,13 +384,13 @@ The helper service provides a clean, auditable, validatable boundary between the
 |--------|-----------|
 | Malicious player names in logs | HTML-escape all log lines; render as plain text in `<pre>` elements |
 | ANSI escape codes | Strip ANSI codes before sending to frontend |
-| Script injection via log content | CSP: `script-src 'self'`; no `dangerouslySetInnerHTML` |
+| Script injection via log content | No `dangerouslySetInnerHTML`; strict log sanitization + React escaping; CSP is baseline (currently includes `'unsafe-inline'` for Next.js runtime compatibility) |
 
 ### 8.11 Reverse Proxy Trust
 
 | Vector | Mitigation |
 |--------|-----------|
-| IP spoofing via X-Forwarded-For | Fastify `trustProxy` set to the specific reverse proxy IP only |
+| IP spoofing via X-Forwarded-For | Fastify `trustProxy` is explicitly configured via `TRUST_PROXY` (default: local/private proxy hops only) |
 | Missing HTTPS | Panel designed to run behind TLS-terminating proxy; HSTS header set |
 | Direct access bypass | Panel binds to 127.0.0.1 or Docker internal network only |
 
@@ -528,12 +534,13 @@ Browser → WS message: {type: "command", data: "whitelist add Player1"}
 ```
 Browser → POST /api/backups/create {label: "before-update"}
   → Fastify validates session + role
-  → Fastify calls Helper: {op: "backup.create", params: {label: "before-update"}}
-  → Helper creates: tar -czf /opt/hytale-backups/{timestamp}_{label}.tar.gz -C /opt/hytale/Server worlds/
-  → Helper computes SHA256 of archive
-  → Helper returns {id, filename, size, sha256, createdAt}
-  → Fastify stores metadata in PostgreSQL backup_metadata table
-  → Returns to browser
+  → Fastify enqueues a backup job in PostgreSQL backup_jobs
+  → Fastify returns 202 Accepted with job id/status
+  → In-process worker claims one queued job (globally serialized with DB advisory lock)
+  → Worker calls Helper: {op: "backup.create", params: {label, operationId}}
+  → Helper persists durable operation state (running → terminal)
+  → Worker finalizes API job state/result
+  → Browser polls /api/backups/jobs/:id until terminal status
 ```
 
 ### 11.5 Crash Detection Flow
@@ -565,10 +572,10 @@ node-cron job (every 5 minutes):
 4. **Live console** — View scrolling log output → type command in input → press Enter → see result in log stream
 5. **Whitelist management** — View player list → add player name → confirm → see updated list
 6. **Ban management** — View ban list → add/remove ban → confirm → see updated list
-7. **Create backup** — Click "Create Backup" → optional label → backup created → appears in list with metadata
-8. **Restore backup** — Select backup → warning modal → confirm → safety snapshot created → restore executes
+7. **Create backup** — Click "Create Backup" → optional label → job queued → UI tracks queued/running/succeeded/failed
+8. **Restore backup** — Select backup → warning modal → confirm → restore job queued and polled to terminal state
 9. **View crash history** — Browse timeline of detected issues with severity and human-readable summaries
-10. **Settings** — Configure paths, timeouts, feature flags → save → restart notice if needed
+10. **Settings** — Manage users and 2FA setup; runtime paths/security values remain env-driven
 11. **Audit log** — Browse chronological log of all admin actions with filters
 
 ### UI Navigation Flow
@@ -585,8 +592,6 @@ node-cron job (every 5 minutes):
               ├── [Crash History]
               ├── [Audit Log]
               └── [Settings]
-                    ├── [Paths & Config]
-                    ├── [Security Settings]
                     ├── [User Management]
                     └── [2FA Setup]
 ```
@@ -654,7 +659,7 @@ node-cron job (every 5 minutes):
 | raw_log | TEXT | |
 | detected_at | TIMESTAMP | DEFAULT now() |
 
-**settings**
+**settings (legacy)**
 | Column | Type | Constraints |
 |--------|------|------------|
 | key | VARCHAR(100) | PK |
@@ -725,9 +730,11 @@ node-cron job (every 5 minutes):
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | /api/backups | Session | List backups |
-| POST | /api/backups/create | Admin | Create backup |
-| POST | /api/backups/:id/restore | Admin | Restore backup |
+| POST | /api/backups/create | Admin | Enqueue create backup job (`202`) |
+| POST | /api/backups/:id/restore | Admin | Enqueue restore backup job (`202`) |
 | DELETE | /api/backups/:id | Admin | Delete backup |
+| GET | /api/backups/jobs/:id | Session | Get backup job status |
+| GET | /api/backups/jobs | Session | List recent backup jobs |
 
 ### System Endpoints
 
@@ -754,8 +761,8 @@ node-cron job (every 5 minutes):
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | /api/settings | Admin | Get all settings |
-| PUT | /api/settings | Admin | Update settings |
+| GET | /api/settings | Admin | Deprecated (`410 Gone`) |
+| PUT | /api/settings | Admin | Deprecated (`410 Gone`) |
 
 ### User Management Endpoints
 
@@ -772,7 +779,7 @@ node-cron job (every 5 minutes):
 
 ### Connection Lifecycle
 
-1. Client initiates WS upgrade to `/ws/console` or `/ws/logs`
+1. Client initiates WS upgrade to `/ws/console`
 2. Server validates session cookie in upgrade handler
 3. Server validates Origin header
 4. Connection established; server sends `{type: "connected", serverStatus: "..."}`
@@ -940,11 +947,11 @@ hytale-panel/
 │   │       │   ├── console.service.ts  # Console/log streaming service
 │   │       │   ├── whitelist.service.ts# Whitelist management
 │   │       │   ├── ban.service.ts      # Ban management
-│   │       │   ├── backup.service.ts   # Backup management
+│   │       │   ├── backup.service.ts   # Backup operations called by job worker
+│   │       │   ├── backup-job.service.ts # Durable backup/restore job queue + worker
 │   │       │   ├── crash.service.ts    # Crash detection/parsing
 │   │       │   ├── stats.service.ts    # System stats
 │   │       │   ├── audit.service.ts    # Audit logging
-│   │       │   └── settings.service.ts # Settings management
 │   │       ├── routes/
 │   │       │   ├── auth.routes.ts
 │   │       │   ├── server.routes.ts
@@ -952,14 +959,14 @@ hytale-panel/
 │   │       │   ├── whitelist.routes.ts
 │   │       │   ├── ban.routes.ts
 │   │       │   ├── backup.routes.ts
+│   │       │   ├── backup-jobs.routes.ts
 │   │       │   ├── crash.routes.ts
 │   │       │   ├── stats.routes.ts
 │   │       │   ├── audit.routes.ts
 │   │       │   ├── settings.routes.ts
 │   │       │   └── user.routes.ts
 │   │       ├── ws/
-│   │       │   ├── console.ws.ts       # WebSocket handler for console
-│   │       │   └── logs.ws.ts          # WebSocket handler for log streaming
+│   │       │   └── console.ws.ts       # WebSocket handler for console
 │   │       ├── jobs/
 │   │       │   ├── crash-detector.ts   # Periodic crash log scanning
 │   │       │   ├── session-cleanup.ts  # Expired session cleanup

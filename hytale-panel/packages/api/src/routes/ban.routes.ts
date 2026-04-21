@@ -29,6 +29,13 @@ export async function banRoutes(fastify: FastifyInstance): Promise<void> {
     async (_request, reply) => {
       try {
         const result = await banService.getBans();
+        if (!result.success) {
+          return reply.status(409).send({
+            success: false,
+            error: result.error ?? 'Failed to read ban list',
+            data: { entries: [] },
+          });
+        }
         return reply.send({ success: result.success, data: { entries: result.entries }, error: result.error });
       } catch (err) {
         return sendHelperDegraded(reply, err);
@@ -58,7 +65,13 @@ export async function banRoutes(fastify: FastifyInstance): Promise<void> {
         details: { reason: body.reason },
       });
 
-      return reply.send({ success: result.success, data: { message: result.message } });
+      return reply
+        .status(result.success ? 200 : 409)
+        .send({
+          success: result.success,
+          data: { message: result.message },
+          error: result.success ? undefined : result.message,
+        });
     }
   );
 
@@ -83,7 +96,13 @@ export async function banRoutes(fastify: FastifyInstance): Promise<void> {
         success: result.success,
       });
 
-      return reply.send({ success: result.success, data: { message: result.message } });
+      return reply
+        .status(result.success ? 200 : 409)
+        .send({
+          success: result.success,
+          data: { message: result.message },
+          error: result.success ? undefined : result.message,
+        });
     }
   );
 }

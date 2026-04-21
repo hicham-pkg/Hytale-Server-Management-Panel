@@ -13,6 +13,7 @@ import { consoleRoutes } from './routes/console.routes';
 import { whitelistRoutes } from './routes/whitelist.routes';
 import { banRoutes } from './routes/ban.routes';
 import { backupRoutes } from './routes/backup.routes';
+import { backupJobRoutes } from './routes/backup-jobs.routes';
 import { crashRoutes } from './routes/crash.routes';
 import { statsRoutes } from './routes/stats.routes';
 import { auditRoutes } from './routes/audit.routes';
@@ -89,6 +90,7 @@ export async function buildApp() {
   await fastify.register(whitelistRoutes);
   await fastify.register(banRoutes);
   await fastify.register(backupRoutes);
+  await fastify.register(backupJobRoutes);
   await fastify.register(crashRoutes);
   await fastify.register(statsRoutes);
   await fastify.register(auditRoutes);
