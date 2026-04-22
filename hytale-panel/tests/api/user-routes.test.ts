@@ -8,11 +8,15 @@ const fastifyCookie = apiRequire('@fastify/cookie') as typeof import('@fastify/c
 const dbState = vi.hoisted(() => ({
   updatedRows: [] as Array<{ id: string }>,
   deletedRows: [] as Array<{ id: string }>,
+  targetUserRows: [] as Array<{ id: string; role: string }>,
+  adminCountRows: [{ count: 1 }] as Array<{ count: number }>,
 }));
 
 const updateReturningMock = vi.hoisted(() => vi.fn());
 const deleteReturningMock = vi.hoisted(() => vi.fn());
 const deleteWhereMock = vi.hoisted(() => vi.fn());
+const selectLimitMock = vi.hoisted(() => vi.fn());
+const selectWhereNoLimitMock = vi.hoisted(() => vi.fn());
 
 const schemaMock = vi.hoisted(() => ({
   users: {
@@ -29,6 +33,22 @@ const schemaMock = vi.hoisted(() => ({
 }));
 
 const dbMock = vi.hoisted(() => ({
+  select: vi.fn((selection?: unknown) => ({
+    from: vi.fn(() => ({
+      where: vi.fn(() => {
+        // Two shapes: { count }.from(users).where(...)  -> returns adminCountRows
+        //             { id, role }.from(users).where(...).limit(1) -> targetUserRows
+        const isCountShape =
+          selection && typeof selection === 'object' && 'count' in (selection as Record<string, unknown>);
+        if (isCountShape) {
+          return selectWhereNoLimitMock();
+        }
+        return {
+          limit: selectLimitMock,
+        };
+      }),
+    })),
+  })),
   update: vi.fn(() => ({
     set: vi.fn(() => ({
       where: vi.fn(() => ({
@@ -55,6 +75,9 @@ const logAuditMock = vi.hoisted(() => vi.fn());
 
 vi.mock('drizzle-orm', () => ({
   eq: vi.fn(() => ({})),
+  and: vi.fn(() => ({})),
+  ne: vi.fn(() => ({})),
+  sql: Object.assign(vi.fn(() => ({})), { raw: vi.fn(() => ({})) }),
 }));
 
 vi.mock('../../packages/api/src/db', () => ({
@@ -80,9 +103,13 @@ describe('user routes missing-target correctness', () => {
   beforeEach(() => {
     dbState.updatedRows = [];
     dbState.deletedRows = [];
+    dbState.targetUserRows = [];
+    dbState.adminCountRows = [{ count: 5 }];
     updateReturningMock.mockReset().mockImplementation(async () => dbState.updatedRows);
     deleteReturningMock.mockReset().mockImplementation(async () => dbState.deletedRows);
     deleteWhereMock.mockReset().mockResolvedValue(undefined);
+    selectLimitMock.mockReset().mockImplementation(async () => dbState.targetUserRows);
+    selectWhereNoLimitMock.mockReset().mockImplementation(async () => dbState.adminCountRows);
     logAuditMock.mockReset();
   });
 
@@ -133,6 +160,94 @@ describe('user routes missing-target correctness', () => {
         success: false,
       })
     );
+
+    await app.close();
+  });
+
+  it('blocks demoting the last admin via PUT and logs a failed audit', async () => {
+    dbState.targetUserRows = [{ id: '550e8400-e29b-41d4-a716-446655440099', role: 'admin' }];
+    dbState.adminCountRows = [{ count: 0 }];
+    const { userRoutes } = await import('../../packages/api/src/routes/user.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(userRoutes);
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/users/550e8400-e29b-41d4-a716-446655440099',
+      payload: { role: 'readonly' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      success: false,
+      error: 'Cannot demote the last admin. Promote another user to admin first.',
+    });
+    expect(logAuditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'user.update',
+        target: '550e8400-e29b-41d4-a716-446655440099',
+        success: false,
+        details: expect.objectContaining({ reason: 'last_admin_demotion_blocked' }),
+      })
+    );
+    expect(updateReturningMock).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('blocks deleting the last admin via DELETE and logs a failed audit', async () => {
+    dbState.targetUserRows = [{ id: '550e8400-e29b-41d4-a716-446655440099', role: 'admin' }];
+    dbState.adminCountRows = [{ count: 0 }];
+    const { userRoutes } = await import('../../packages/api/src/routes/user.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(userRoutes);
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/users/550e8400-e29b-41d4-a716-446655440099',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      success: false,
+      error: 'Cannot delete the last admin. Promote another user to admin first.',
+    });
+    expect(logAuditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'user.delete',
+        target: '550e8400-e29b-41d4-a716-446655440099',
+        success: false,
+        details: expect.objectContaining({ reason: 'last_admin_deletion_blocked' }),
+      })
+    );
+    expect(deleteReturningMock).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('allows demoting an admin when another admin remains', async () => {
+    dbState.targetUserRows = [{ id: '550e8400-e29b-41d4-a716-446655440099', role: 'admin' }];
+    dbState.adminCountRows = [{ count: 2 }];
+    dbState.updatedRows = [{ id: '550e8400-e29b-41d4-a716-446655440099' }];
+    const { userRoutes } = await import('../../packages/api/src/routes/user.routes');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(userRoutes);
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/users/550e8400-e29b-41d4-a716-446655440099',
+      payload: { role: 'readonly' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ success: true });
+    expect(updateReturningMock).toHaveBeenCalled();
 
     await app.close();
   });

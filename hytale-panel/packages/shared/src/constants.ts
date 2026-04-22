@@ -10,6 +10,13 @@ export const PLAYER_NAME_REGEX = /^[a-zA-Z0-9_]{1,32}$/;
 /** Regex for valid backup labels */
 export const BACKUP_LABEL_REGEX = /^[a-zA-Z0-9_\-]{1,50}$/;
 
+/**
+ * Regex for valid ban reasons. Must be a subset of COMMAND_CHAR_ALLOWLIST so
+ * the API can safely interpolate it into `ban <name> <reason>` console
+ * commands without the helper's command validator rejecting it at runtime.
+ */
+export const BAN_REASON_REGEX = /^[a-zA-Z0-9 _\-\.@:\/]{0,200}$/;
+
 /** Regex for valid backup filenames */
 export const BACKUP_FILENAME_REGEX = /^[a-zA-Z0-9_\-\.]+\.tar\.gz$/;
 

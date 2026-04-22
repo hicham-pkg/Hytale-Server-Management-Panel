@@ -9,6 +9,7 @@ import {
   UUID_REGEX,
   MAX_LOG_LINES,
   MAX_CAPTURE_LINES,
+  AddBanSchema,
 } from '@hytale-panel/shared';
 
 /**
@@ -25,11 +26,6 @@ const SendCommandSchema = z.object({
 
 const AddPlayerSchema = z.object({
   name: z.string().min(1).max(32).regex(PLAYER_NAME_REGEX, 'Invalid player name'),
-});
-
-const AddBanSchema = z.object({
-  name: z.string().min(1).max(32).regex(PLAYER_NAME_REGEX, 'Invalid player name'),
-  reason: z.string().max(200).optional().default(''),
 });
 
 const CreateBackupSchema = z.object({
@@ -97,6 +93,15 @@ describe('Input Validation — Ban Schema', () => {
 
   it('should reject reason exceeding 200 characters', () => {
     expect(() => AddBanSchema.parse({ name: 'griefer', reason: 'x'.repeat(201) })).toThrow();
+  });
+
+  it('should reject reason with characters outside the helper command allowlist', () => {
+    // Characters NOT in COMMAND_CHAR_ALLOWLIST would cause the helper to
+    // reject the online `ban <name> <reason>` command at runtime.
+    expect(() => AddBanSchema.parse({ name: 'griefer', reason: "don't" })).toThrow();
+    expect(() => AddBanSchema.parse({ name: 'griefer', reason: 'spam; rm -rf /' })).toThrow();
+    expect(() => AddBanSchema.parse({ name: 'griefer', reason: 'bad|pipe' })).toThrow();
+    expect(() => AddBanSchema.parse({ name: 'griefer', reason: 'newline\ninjection' })).toThrow();
   });
 
   it('should reject ban with invalid player name', () => {

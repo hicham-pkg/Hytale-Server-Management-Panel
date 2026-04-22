@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { CreateUserSchema, UpdateUserSchema, UUID_REGEX } from '@hytale-panel/shared';
 import { getDb, schema } from '../db';
 import { hashPassword } from '../utils/crypto';
@@ -9,6 +9,14 @@ import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
 
 const { users, sessions } = schema;
+
+async function countOtherAdmins(db: ReturnType<typeof getDb>, excludeUserId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(users)
+    .where(and(eq(users.role, 'admin'), ne(users.id, excludeUserId)));
+  return Number(row?.count ?? 0);
+}
 
 export async function userRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get(
@@ -69,6 +77,35 @@ export async function userRoutes(fastify: FastifyInstance): Promise<void> {
       const body = UpdateUserSchema.parse(request.body);
       const db = getDb();
 
+      // Prevent demoting the last admin to readonly, which would brick user
+      // management. Checking `ne(id, target)` means we count admins OTHER
+      // THAN the one being changed — if that count is 0 and we're demoting,
+      // the target is the only admin left.
+      if (body.role === 'readonly') {
+        const otherAdmins = await countOtherAdmins(db, params.id);
+        if (otherAdmins === 0) {
+          const [target] = await db
+            .select({ id: users.id, role: users.role })
+            .from(users)
+            .where(eq(users.id, params.id))
+            .limit(1);
+          if (target && target.role === 'admin') {
+            await logAudit({
+              userId: request.currentUser!.id,
+              action: 'user.update',
+              target: params.id,
+              details: { reason: 'last_admin_demotion_blocked' },
+              ipAddress: request.ip,
+              success: false,
+            });
+            return reply.status(400).send({
+              success: false,
+              error: 'Cannot demote the last admin. Promote another user to admin first.',
+            });
+          }
+        }
+      }
+
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (body.role) updates.role = body.role;
       if (body.password) updates.passwordHash = await hashPassword(body.password);
@@ -120,6 +157,32 @@ export async function userRoutes(fastify: FastifyInstance): Promise<void> {
       // Prevent self-deletion
       if (params.id === request.currentUser!.id) {
         return reply.status(400).send({ success: false, error: 'Cannot delete your own account' });
+      }
+
+      // Prevent deleting the last admin (the target may be the lone remaining
+      // admin, or the lone remaining admin could be the invoker themselves —
+      // both states leave no one to promote another user).
+      const [target] = await db
+        .select({ id: users.id, role: users.role })
+        .from(users)
+        .where(eq(users.id, params.id))
+        .limit(1);
+      if (target && target.role === 'admin') {
+        const otherAdmins = await countOtherAdmins(db, params.id);
+        if (otherAdmins === 0) {
+          await logAudit({
+            userId: request.currentUser!.id,
+            action: 'user.delete',
+            target: params.id,
+            details: { reason: 'last_admin_deletion_blocked' },
+            ipAddress: request.ip,
+            success: false,
+          });
+          return reply.status(400).send({
+            success: false,
+            error: 'Cannot delete the last admin. Promote another user to admin first.',
+          });
+        }
       }
 
       const deletedUsers = await db

@@ -73,7 +73,7 @@ echo "[5/9] Rebuilding and recreating panel containers..."
 docker_compose up -d --build postgres api web
 
 echo ""
-echo "[6/8] Waiting for API and web health..."
+echo "[6/9] Waiting for API and web health..."
 API_HOST_PORT="${API_HOST_PORT:-$(grep -E '^API_HOST_PORT=' .env | tail -n 1 | cut -d= -f2- || true)}"
 API_HOST_PORT="${API_HOST_PORT:-4000}"
 WEB_HOST_PORT="${WEB_HOST_PORT:-$(grep -E '^WEB_HOST_PORT=' .env | tail -n 1 | cut -d= -f2- || true)}"
@@ -82,11 +82,11 @@ wait_for_http "http://127.0.0.1:${API_HOST_PORT}/api/health" "API health is read
 wait_for_http "http://127.0.0.1:${WEB_HOST_PORT}/api/health" "Web proxy can reach /api/health on 127.0.0.1:${WEB_HOST_PORT}" 60
 
 echo ""
-echo "[7/8] Running database migrations..."
+echo "[7/9] Running database migrations..."
 docker_compose exec -T api node dist/db/migrate.js
 
 echo ""
-echo "[8/8] Running repair flow..."
+echo "[8/9] Running repair flow..."
 bash scripts/repair-panel.sh
 
 echo ""

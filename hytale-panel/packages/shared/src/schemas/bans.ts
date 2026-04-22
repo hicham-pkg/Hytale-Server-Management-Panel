@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PLAYER_NAME_REGEX } from '../constants';
+import { BAN_REASON_REGEX, PLAYER_NAME_REGEX } from '../constants';
 
 export const BanEntrySchema = z.object({
   name: z.string().regex(PLAYER_NAME_REGEX),
@@ -11,7 +11,12 @@ export const BanFileSchema = z.array(BanEntrySchema);
 
 export const AddBanSchema = z.object({
   name: z.string().min(1).max(32).regex(PLAYER_NAME_REGEX, 'Invalid player name'),
-  reason: z.string().max(200).optional().default(''),
+  reason: z
+    .string()
+    .max(200)
+    .regex(BAN_REASON_REGEX, 'Ban reason must contain only letters, digits, space, and _-.@:/')
+    .optional()
+    .default(''),
 });
 
 export const RemoveBanSchema = z.object({

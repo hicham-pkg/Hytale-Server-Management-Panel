@@ -1,4 +1,4 @@
-import { eq, lt, or } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import * as OTPAuth from 'otpauth';
 import * as QRCode from 'qrcode';
 import { getDb, schema } from '../db';
@@ -188,8 +188,12 @@ export async function login(
 
   const passwordValid = await verifyPassword(user.passwordHash, password);
   if (!passwordValid) {
-    // Increment failed attempts
-    const newAttempts = user.failedLoginAttempts + 1;
+    // Reset the counter when a prior lockout has expired, otherwise a single
+    // wrong password after cooldown immediately re-locks the account forever.
+    const lockoutExpired =
+      user.lockedUntil !== null && new Date(user.lockedUntil) <= new Date();
+    const baseAttempts = lockoutExpired ? 0 : user.failedLoginAttempts;
+    const newAttempts = baseAttempts + 1;
     const lockUntil =
       newAttempts >= config.maxFailedLogins
         ? new Date(Date.now() + config.lockoutDurationMinutes * 60_000)
