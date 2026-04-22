@@ -150,7 +150,11 @@ prompt_value() {
   local current_value="$2"
   local input_value
 
-  printf '%s [%s]: ' "$prompt_label" "$current_value"
+  # These helpers are called inside $(...) command substitution, so the
+  # caller captures stdout. Write the prompt to stderr so the user
+  # actually sees it and it does not contaminate the returned value.
+  # stdin is NOT captured by $(...), so `read` still sees the TTY.
+  printf '%s [%s]: ' "$prompt_label" "$current_value" >&2
   read -r input_value
   if [ -n "$input_value" ]; then
     printf '%s' "$input_value"
@@ -170,7 +174,9 @@ prompt_port_value() {
       printf '%s' "$candidate"
       return 0
     fi
-    log_warn "${prompt_label} must be a number between 1 and 65535."
+    # Stderr so the warning is visible even when this function is called
+    # from a $(...) command substitution.
+    printf '[WARN] %s must be a number between 1 and 65535.\n' "$prompt_label" >&2
   done
 }
 
@@ -262,18 +268,19 @@ ensure_free_port() {
     candidate="$(prompt_port_value "$label" "$candidate")"
 
     if _port_already_claimed "$candidate"; then
-      log_warn "Port ${candidate} is already assigned to another panel service in this install — pick a different one."
+      printf '[WARN] Port %s is already assigned to another panel service in this install — pick a different one.\n' "$candidate" >&2
       continue
     fi
 
     if is_port_in_use "$candidate"; then
       holder="$(describe_port_holder "$candidate")"
-      log_warn "Port ${candidate} is already in use on this host (${holder})."
-      printf '  Enter a different port, or press Ctrl-C to abort the install.\n'
+      printf '[WARN] Port %s is already in use on this host (%s).\n' "$candidate" "$holder" >&2
+      printf '       Enter a different port, or press Ctrl-C to abort the install.\n' >&2
       continue
     fi
 
     ALREADY_CLAIMED_PORTS+=("$candidate")
+    printf '[OK] %s resolved to %s\n' "$label" "$candidate" >&2
     printf '%s' "$candidate"
     return 0
   done
@@ -322,19 +329,24 @@ configure_panel_settings() {
   echo ""
 
   web_port="$(prompt_port_value 'Web host port' "$current_web")"
+  printf '  -> Web host port           : %s\n' "$web_port"
   api_port="$(prompt_port_value 'API host port' "$current_api")"
+  printf '  -> API host port           : %s\n' "$api_port"
   pg_port="$(prompt_port_value 'PostgreSQL host port' "$current_pg")"
+  printf '  -> PostgreSQL host port    : %s\n' "$pg_port"
 
   echo ""
   echo "Enter the public panel origin — the URL your browser will use."
   echo "  - Private SSH tunnel testing: http://localhost:<tunnelled port>"
   echo "  - Real domain behind a reverse proxy: https://panel.example.com"
   cors_origin="$(prompt_value 'Public panel origin' "${current_cors:-https://panel.yourdomain.com}")"
+  printf '  -> Public panel origin     : %s\n' "$cors_origin"
 
   echo ""
   echo "WebSocket allowed origins (comma-separated). In production this must"
   echo "include the URL the browser sees, otherwise the live console is rejected."
   ws_origins="$(prompt_value 'WebSocket allowed origins' "${current_ws:-$cors_origin}")"
+  printf '  -> WebSocket allowed origin: %s\n' "$ws_origins"
 
   set_env_var "$PANEL_DIR/.env" WEB_HOST_PORT "$web_port"
   set_env_var "$PANEL_DIR/.env" API_HOST_PORT "$api_port"
