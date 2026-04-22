@@ -174,39 +174,226 @@ prompt_port_value() {
   done
 }
 
-prompt_for_initial_env_setup() {
-  local response
-  local web_port
-  local api_port
-  local postgres_port
-  local cors_origin
-  local ws_allowed_origins
+# True (exit 0) if some process is currently bound to the given TCP port on
+# any local address. Uses ss first, falls back to netstat or lsof.
+is_port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -Htln 2>/dev/null | awk -v p=":$port\$" '$4 ~ p { found=1; exit } END { exit !found }'
+    return $?
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -tln 2>/dev/null | awk -v p=":$port\$" '/^tcp/ && $4 ~ p { found=1; exit } END { exit !found }'
+    return $?
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$port" -sTCP:LISTEN -P -n >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
 
-  if [ "$CREATED_ROOT_ENV" -ne 1 ] || [ ! -t 0 ] || [ "$NON_INTERACTIVE" -eq 1 ]; then
+# Short human-friendly description of whatever is holding a port, e.g.
+# "docker-proxy (pid 1234)" or "unknown process". Never errors out.
+describe_port_holder() {
+  local port="$1"
+  local line
+  if command -v ss >/dev/null 2>&1; then
+    line="$(ss -Htlnp 2>/dev/null | awk -v p=":$port\$" '$4 ~ p { print; exit }')"
+    if [ -n "$line" ]; then
+      local extracted
+      extracted="$(printf '%s' "$line" | grep -oE 'users:\(\([^)]+\)\)' | head -1)"
+      if [ -n "$extracted" ]; then
+        printf '%s' "$extracted" | sed -E 's/users:\(\(//; s/\)\)$//'
+        return 0
+      fi
+    fi
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    line="$(lsof -iTCP:"$port" -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR==2 { printf "%s (pid %s)", $1, $2; exit }')"
+    if [ -n "$line" ]; then
+      printf '%s' "$line"
+      return 0
+    fi
+  fi
+  printf 'unknown process'
+}
+
+# Stops any running panel containers so their host-port bindings are released
+# before we probe port availability. No-op if docker / compose aren't present
+# or there is nothing running. Always succeeds.
+stop_panel_containers_if_any() {
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ ! -f "$PANEL_DIR/docker-compose.yml" ]; then
+    return 0
+  fi
+  ( cd "$PANEL_DIR" && docker compose ps -q 2>/dev/null | grep -q . ) || return 0
+  log_info "Stopping existing panel containers to release any held host ports..."
+  ( cd "$PANEL_DIR" && docker compose down --remove-orphans >/dev/null 2>&1 ) || true
+}
+
+# Internal helper — tracks ports already assigned in this install run so the
+# same port cannot be reused between web/api/postgres.
+ALREADY_CLAIMED_PORTS=()
+_port_already_claimed() {
+  local port="$1"
+  local claimed
+  for claimed in "${ALREADY_CLAIMED_PORTS[@]}"; do
+    [ "$claimed" = "$port" ] && return 0
+  done
+  return 1
+}
+
+# Loop: ask the user for a port, verify it parses AND is free AND hasn't
+# already been claimed by another panel service in this run. Keeps asking
+# until it gets a valid answer or the user Ctrl-Cs.
+ensure_free_port() {
+  local label="$1"
+  local desired="$2"
+  local candidate="$desired"
+  local holder
+
+  while true; do
+    candidate="$(prompt_port_value "$label" "$candidate")"
+
+    if _port_already_claimed "$candidate"; then
+      log_warn "Port ${candidate} is already assigned to another panel service in this install — pick a different one."
+      continue
+    fi
+
+    if is_port_in_use "$candidate"; then
+      holder="$(describe_port_holder "$candidate")"
+      log_warn "Port ${candidate} is already in use on this host (${holder})."
+      printf '  Enter a different port, or press Ctrl-C to abort the install.\n'
+      continue
+    fi
+
+    ALREADY_CLAIMED_PORTS+=("$candidate")
+    printf '%s' "$candidate"
+    return 0
+  done
+}
+
+# Interactive panel-networking configuration. Always runs when the install is
+# interactive — on a rerun it reads current .env values and offers them as
+# defaults so users never need to hand-edit .env for a standard setup.
+configure_panel_settings() {
+  local response
+  local current_web current_api current_pg current_cors current_ws
+  local web_port api_port pg_port cors_origin ws_origins
+
+  current_web="$(read_env_value "$PANEL_DIR/.env" WEB_HOST_PORT || printf '3000')"
+  current_api="$(read_env_value "$PANEL_DIR/.env" API_HOST_PORT || printf '4000')"
+  current_pg="$(read_env_value "$PANEL_DIR/.env" POSTGRES_HOST_PORT || printf '5432')"
+  current_cors="$(read_env_value "$PANEL_DIR/.env" CORS_ORIGIN || printf '')"
+  current_ws="$(read_env_value "$PANEL_DIR/.env" WS_ALLOWED_ORIGINS || printf '')"
+
+  if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+    log_info "Non-interactive mode — keeping current panel networking settings."
     return 0
   fi
 
-  printf '\nCustomize host ports or browser origins now? [y/N]: '
+  echo ""
+  echo "Panel networking settings:"
+  printf '  Web host port           : %s\n' "$current_web"
+  printf '  API host port           : %s\n' "$current_api"
+  printf '  PostgreSQL host port    : %s\n' "$current_pg"
+  printf '  Public panel origin     : %s\n' "${current_cors:-<unset>}"
+  printf '  WebSocket allowed origin: %s\n' "${current_ws:-<unset>}"
+  echo ""
+
+  printf 'Customize ports and browser origins now? [Y/n]: '
   read -r response
-  case "${response:-N}" in
-    [Yy]*)
-      ;;
-    *)
+  case "${response:-Y}" in
+    [Nn]*)
+      log_info "Keeping current panel networking settings."
       return 0
       ;;
   esac
 
-  web_port="$(prompt_port_value "WEB_HOST_PORT" "$(read_env_value "$PANEL_DIR/.env" WEB_HOST_PORT || printf '3000')")"
-  api_port="$(prompt_port_value "API_HOST_PORT" "$(read_env_value "$PANEL_DIR/.env" API_HOST_PORT || printf '4000')")"
-  postgres_port="$(prompt_port_value "POSTGRES_HOST_PORT" "$(read_env_value "$PANEL_DIR/.env" POSTGRES_HOST_PORT || printf '5432')")"
-  cors_origin="$(prompt_value "CORS_ORIGIN" "$(read_env_value "$PANEL_DIR/.env" CORS_ORIGIN || printf 'https://panel.yourdomain.com')")"
-  ws_allowed_origins="$(prompt_value "WS_ALLOWED_ORIGINS" "$(read_env_value "$PANEL_DIR/.env" WS_ALLOWED_ORIGINS || printf '%s' "$cors_origin")")"
+  echo ""
+  echo "Choose host ports. Each one must be free on this machine. If a port is"
+  echo "taken the installer will say so and let you pick another."
+  echo ""
+
+  web_port="$(prompt_port_value 'Web host port' "$current_web")"
+  api_port="$(prompt_port_value 'API host port' "$current_api")"
+  pg_port="$(prompt_port_value 'PostgreSQL host port' "$current_pg")"
+
+  echo ""
+  echo "Enter the public panel origin — the URL your browser will use."
+  echo "  - Private SSH tunnel testing: http://localhost:<tunnelled port>"
+  echo "  - Real domain behind a reverse proxy: https://panel.example.com"
+  cors_origin="$(prompt_value 'Public panel origin' "${current_cors:-https://panel.yourdomain.com}")"
+
+  echo ""
+  echo "WebSocket allowed origins (comma-separated). In production this must"
+  echo "include the URL the browser sees, otherwise the live console is rejected."
+  ws_origins="$(prompt_value 'WebSocket allowed origins' "${current_ws:-$cors_origin}")"
 
   set_env_var "$PANEL_DIR/.env" WEB_HOST_PORT "$web_port"
   set_env_var "$PANEL_DIR/.env" API_HOST_PORT "$api_port"
-  set_env_var "$PANEL_DIR/.env" POSTGRES_HOST_PORT "$postgres_port"
+  set_env_var "$PANEL_DIR/.env" POSTGRES_HOST_PORT "$pg_port"
   set_env_var "$PANEL_DIR/.env" CORS_ORIGIN "$cors_origin"
-  set_env_var "$PANEL_DIR/.env" WS_ALLOWED_ORIGINS "$ws_allowed_origins"
+  set_env_var "$PANEL_DIR/.env" WS_ALLOWED_ORIGINS "$ws_origins"
+
+  log_ok "Saved panel networking settings to .env"
+}
+
+# Before bringing up compose, make absolutely sure the configured ports are
+# free. Stops panel containers first so we do not flag our own previous
+# bindings. Prompts the user for a replacement on conflict; loops until free.
+finalize_ports_or_exit() {
+  local current_web current_api current_pg
+  local resolved_web resolved_api resolved_pg
+
+  current_web="$(read_env_value "$PANEL_DIR/.env" WEB_HOST_PORT || printf '3000')"
+  current_api="$(read_env_value "$PANEL_DIR/.env" API_HOST_PORT || printf '4000')"
+  current_pg="$(read_env_value "$PANEL_DIR/.env" POSTGRES_HOST_PORT || printf '5432')"
+
+  stop_panel_containers_if_any
+
+  if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+    # Non-interactive: don't block the install on prompts, but surface issues
+    # loudly so CI logs show them. Docker compose up will then fail with a
+    # clearer native error if the port is truly stuck.
+    local p
+    for p in "$current_web" "$current_api" "$current_pg"; do
+      if is_port_in_use "$p"; then
+        log_warn "Port ${p} is already in use on this host ($(describe_port_holder "$p")). Container bring-up may fail."
+      fi
+    done
+    return 0
+  fi
+
+  ALREADY_CLAIMED_PORTS=()
+  log_info "Verifying the configured host ports are free..."
+  resolved_web="$(ensure_free_port 'Web host port' "$current_web")"
+  resolved_api="$(ensure_free_port 'API host port' "$current_api")"
+  resolved_pg="$(ensure_free_port 'PostgreSQL host port' "$current_pg")"
+
+  if [ "$resolved_web" != "$current_web" ]; then
+    set_env_var "$PANEL_DIR/.env" WEB_HOST_PORT "$resolved_web"
+    log_ok "Updated WEB_HOST_PORT to ${resolved_web}"
+  fi
+  if [ "$resolved_api" != "$current_api" ]; then
+    set_env_var "$PANEL_DIR/.env" API_HOST_PORT "$resolved_api"
+    log_ok "Updated API_HOST_PORT to ${resolved_api}"
+  fi
+  if [ "$resolved_pg" != "$current_pg" ]; then
+    set_env_var "$PANEL_DIR/.env" POSTGRES_HOST_PORT "$resolved_pg"
+    log_ok "Updated POSTGRES_HOST_PORT to ${resolved_pg}"
+  fi
+}
+
+prompt_for_initial_env_setup() {
+  # Retained as a thin alias for backwards compat with prior call sites.
+  configure_panel_settings
 }
 
 wait_for_http() {
@@ -394,11 +581,10 @@ USAGE
     esac
   done
 
-  # Update-panel.sh and other automation call install.sh with SKIP_* env vars.
-  # Treat that as non-interactive so we don't block on prompts inside CI.
-  if [ "${SKIP_PANEL_BRINGUP:-0}" = "1" ] || [ "${SKIP_HELPER_BUILD:-0}" = "1" ] || [ "${SKIP_SYSTEM_DEPS:-0}" = "1" ]; then
-    NON_INTERACTIVE=1
-  fi
+  # SKIP_* env vars are used both by update-panel.sh (interactive rerun) and
+  # by CI (non-interactive). Do NOT auto-force NON_INTERACTIVE here — every
+  # prompt site already checks `[ ! -t 0 ]` for the no-TTY case, and users
+  # rerunning via update-panel.sh need the port/origin prompts to fire.
 }
 
 preflight_summary() {
@@ -419,8 +605,8 @@ Preflight summary — this script will:
 
 SUMMARY
 
-  if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
-    log_info "Non-interactive mode — proceeding without confirmation"
+  if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ] || [ "${SKIP_PANEL_BRINGUP:-0}" = "1" ]; then
+    log_info "Skipping preflight confirmation"
     return 0
   fi
 
@@ -715,7 +901,8 @@ require_env_var "$PANEL_DIR/.env" CSRF_SECRET
 require_env_var "$PANEL_DIR/.env" HELPER_HMAC_SECRET
 require_env_var "$PANEL_DIR/.env" PANEL_SOCKET_GID
 
-prompt_for_initial_env_setup
+configure_panel_settings
+finalize_ports_or_exit
 
 if [ "$(read_env_value "$PANEL_DIR/.env" PANEL_SOCKET_GID)" != "$PANEL_SOCKET_GID" ]; then
   log_error "PANEL_SOCKET_GID in .env does not match the installed host group GID."
@@ -723,10 +910,6 @@ if [ "$(read_env_value "$PANEL_DIR/.env" PANEL_SOCKET_GID)" != "$PANEL_SOCKET_GI
 fi
 
 log_ok ".env contains non-empty DB password and required secrets"
-echo ""
-log_warn "IMPORTANT: Edit .env to set CORS_ORIGIN and WS_ALLOWED_ORIGINS to your domain"
-echo "    Example: CORS_ORIGIN=https://panel.yourdomain.com"
-echo ""
 
 # ─── Step 8: Helper Service Setup & Panel Bring-Up ─────────
 log_info "[8/9] Deploying helper service and bringing up the panel..."
@@ -838,19 +1021,19 @@ wait_for_socket "$STABLE_HELPER_SOCKET_PATH" "Helper is listening on the stable 
 
 remove_legacy_helper_socket_if_safe
 
-API_HOST_PORT="${API_HOST_PORT:-$(read_env_value "$PANEL_DIR/.env" API_HOST_PORT || true)}"
-API_HOST_PORT="${API_HOST_PORT:-4000}"
-WEB_HOST_PORT="${WEB_HOST_PORT:-$(read_env_value "$PANEL_DIR/.env" WEB_HOST_PORT || true)}"
-WEB_HOST_PORT="${WEB_HOST_PORT:-3000}"
-POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-$(read_env_value "$PANEL_DIR/.env" POSTGRES_HOST_PORT || true)}"
-POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-5432}"
 if [ "${SKIP_PANEL_BRINGUP:-0}" = "1" ]; then
   log_info "Skipping panel container bring-up and migrations (SKIP_PANEL_BRINGUP=1)"
 else
+  # Read the resolved values — configure_panel_settings / finalize_ports_or_exit
+  # may have rewritten them earlier in the run.
+  API_HOST_PORT="$(read_env_value "$PANEL_DIR/.env" API_HOST_PORT || printf '4000')"
+  WEB_HOST_PORT="$(read_env_value "$PANEL_DIR/.env" WEB_HOST_PORT || printf '3000')"
+  POSTGRES_HOST_PORT="$(read_env_value "$PANEL_DIR/.env" POSTGRES_HOST_PORT || printf '5432')"
+
   DB_PASSWORD_VALUE="$(read_env_value "$PANEL_DIR/.env" DB_PASSWORD)"
   DATABASE_URL_VALUE="postgresql://hytale_panel:${DB_PASSWORD_VALUE}@127.0.0.1:${POSTGRES_HOST_PORT}/hytale_panel"
 
-  log_info "Starting panel containers..."
+  log_info "Starting panel containers (web:${WEB_HOST_PORT}, api:${API_HOST_PORT}, postgres:${POSTGRES_HOST_PORT})..."
   cd "$PANEL_DIR"
   docker compose up -d --build postgres api web
 
@@ -895,6 +1078,12 @@ else
 fi
 
 # ─── Summary ───────────────────────────────────────────────
+FINAL_WEB_HOST_PORT="$(read_env_value "$PANEL_DIR/.env" WEB_HOST_PORT || printf '3000')"
+FINAL_API_HOST_PORT="$(read_env_value "$PANEL_DIR/.env" API_HOST_PORT || printf '4000')"
+FINAL_POSTGRES_HOST_PORT="$(read_env_value "$PANEL_DIR/.env" POSTGRES_HOST_PORT || printf '5432')"
+FINAL_CORS_ORIGIN="$(read_env_value "$PANEL_DIR/.env" CORS_ORIGIN || printf '<unset>')"
+FINAL_WS_ORIGINS="$(read_env_value "$PANEL_DIR/.env" WS_ALLOWED_ORIGINS || printf '<unset>')"
+
 echo ""
 echo "============================================"
 echo "  Installation Complete!"
@@ -910,8 +1099,15 @@ else
   echo "  - Database migrations completed"
 fi
 echo ""
+echo "Configured networking:"
+printf '  - Web host port           : 127.0.0.1:%s\n' "$FINAL_WEB_HOST_PORT"
+printf '  - API host port           : 127.0.0.1:%s\n' "$FINAL_API_HOST_PORT"
+printf '  - PostgreSQL host port    : 127.0.0.1:%s\n' "$FINAL_POSTGRES_HOST_PORT"
+printf '  - Public panel origin     : %s\n' "$FINAL_CORS_ORIGIN"
+printf '  - WebSocket allowed origin: %s\n' "$FINAL_WS_ORIGINS"
+echo ""
 echo "Operator commands:"
-echo "  - Update:  bash deploy/update-panel.sh"
+echo "  - Update:  bash deploy/update-panel.sh   (also re-prompts for ports / origins)"
 echo "  - Repair:  bash scripts/repair-panel.sh"
 echo "  - Health:  bash scripts/doctor.sh"
 echo "  - Smoke:   bash scripts/smoke-test.sh"
@@ -921,21 +1117,20 @@ echo "  1. Install the Hytale server files under ${HYTALE_SERVER_PATH} and creat
 echo "  2. Start the tmux-managed game server when ready:"
 echo "     sudo systemctl enable hytale-tmux.service"
 echo "     sudo systemctl restart hytale-tmux.service"
-echo "  3. Edit .env and set your browser origins for private testing or your real domain:"
-echo "     nano .env"
-echo "     # After changing host ports or origins later, rerun: bash deploy/update-panel.sh"
+echo "  3. If you need to change ports or browser origins later, just rerun:"
+echo "     sudo bash deploy/update-panel.sh"
+echo "     (it reuses the same interactive prompts — no hand-editing .env required)"
 echo "  4. If you skipped admin creation, create the first admin user:"
 echo "     DB_PASSWORD=\$(grep '^DB_PASSWORD=' .env | cut -d= -f2-)"
-echo "     POSTGRES_HOST_PORT=\${POSTGRES_HOST_PORT:-5432}"
+echo "     POSTGRES_HOST_PORT=\${POSTGRES_HOST_PORT:-${FINAL_POSTGRES_HOST_PORT}}"
 echo "     DATABASE_URL=\"postgresql://hytale_panel:\${DB_PASSWORD}@127.0.0.1:\${POSTGRES_HOST_PORT}/hytale_panel\" pnpm --filter @hytale-panel/api seed"
 echo "  5. For private first-run access, use an SSH tunnel to WEB_HOST_PORT and complete admin TOTP enrollment"
 echo "  6. Set up your reverse proxy when private testing is complete (see docs/reverse-proxy.md)"
 echo ""
 echo "Security reminders:"
-echo "  - API binds to 127.0.0.1:4000 only — never exposed directly"
+printf '  - API binds to 127.0.0.1:%s only — never exposed directly\n' "$FINAL_API_HOST_PORT"
 echo "  - Always use TLS via reverse proxy"
-echo "  - Review .env settings before production use"
 echo "  - Helper runs as root with a local-only systemd sandbox and HMAC-authenticated Unix socket"
-echo "  - API container joins helper socket GID \$PANEL_SOCKET_GID to reach /run/hytale-helper/hytale-helper.sock"
+echo "  - API container joins helper socket GID ${PANEL_SOCKET_GID} to reach /run/hytale-helper/hytale-helper.sock"
 echo "  - Host helper socket path is $HELPER_RUNTIME_DIR/hytale-helper.sock"
 echo ""

@@ -62,6 +62,8 @@ echo "[2/9] Building workspace..."
 
 echo ""
 echo "[3/9] Refreshing installed units, env backfills, and directories..."
+echo "      (install.sh will re-prompt for ports and browser origins — press"
+echo "      Enter at each prompt to keep current values.)"
 sudo env SKIP_SYSTEM_DEPS=1 SKIP_HELPER_BUILD=1 SKIP_PANEL_BRINGUP=1 ./install.sh
 
 echo ""
