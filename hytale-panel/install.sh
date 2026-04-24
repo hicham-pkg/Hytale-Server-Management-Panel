@@ -10,11 +10,11 @@
 #
 # What this script does:
 #   1. Installs system dependencies (tmux, docker, curl, openssl, pnpm)
-#   2. Creates the hytale user and keeps the legacy hytale-helper account aligned if present
+#   2. Creates the hytale user, dedicated helper user, and hytale-panel socket group
 #   3. Detects or prompts for the Hytale game server directory
 #   4. Sets up directories with correct permissions
 #   5. Installs systemd service units
-#   6. Retires legacy helper sudoers rules and stale manual drop-ins
+#   6. Installs narrow helper sudoers rules and retires stale manual drop-ins
 #   7. Generates cryptographic secrets
 #   8. Deploys the helper service, reloads systemd, brings up containers, runs migrations
 #   9. Runs scripts/doctor.sh to verify the installation is healthy
@@ -41,8 +41,11 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 PANEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PANEL_SOCKET_GROUP="hytale-panel"
 DEFAULT_PANEL_SOCKET_GID=2001
+HELPER_USER="hytale-helper"
 HELPER_RUNTIME_DIR="/opt/hytale-panel/run"
 HELPER_ENV_FILE="/opt/hytale-panel/helper/.env"
+HELPER_WRAPPER_DIR="/usr/local/lib/hytale-panel"
+HELPER_JOURNALCTL_WRAPPER="${HELPER_WRAPPER_DIR}/hytale-helper-journalctl"
 STABLE_HELPER_SOCKET_PATH="${HELPER_RUNTIME_DIR}/hytale-helper.sock"
 LEGACY_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 HELPER_OVERRIDE_DIR="/etc/systemd/system/hytale-helper.service.d"
@@ -142,6 +145,21 @@ remove_legacy_helper_socket_if_safe() {
   if [ -S "$LEGACY_HELPER_SOCKET_PATH" ] && [ -S "$STABLE_HELPER_SOCKET_PATH" ]; then
     rm -f "$LEGACY_HELPER_SOCKET_PATH"
     log_ok "Removed stale legacy helper socket at $LEGACY_HELPER_SOCKET_PATH"
+  fi
+}
+
+install_helper_sudoers() {
+  local sudoers_target="/etc/sudoers.d/hytale-helper"
+
+  install -d -o root -g root -m 0755 "$HELPER_WRAPPER_DIR"
+  install -o root -g root -m 0755 "$PANEL_DIR/systemd/hytale-helper-journalctl" "$HELPER_JOURNALCTL_WRAPPER"
+
+  cp "$PANEL_DIR/systemd/hytale-helper.sudoers" "$sudoers_target"
+  chown root:root "$sudoers_target"
+  chmod 440 "$sudoers_target"
+
+  if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "$sudoers_target" >/dev/null
   fi
 }
 
@@ -606,11 +624,11 @@ preflight_summary() {
 
 Preflight summary — this script will:
   [1/9]  Install system dependencies (tmux, docker, node 20, pnpm)
-  [2/9]  Create the hytale user + hytale-panel group (GID ${PANEL_SOCKET_GID})
+  [2/9]  Create the hytale user, helper user, and hytale-panel group (GID ${PANEL_SOCKET_GID})
   [3/9]  Detect or choose the Hytale server directory
   [4/9]  Create /opt/hytale, /opt/hytale-backups, /opt/hytale-panel with correct owners
   [5/9]  Install systemd units (hytale-helper.service, hytale-tmux.service)
-  [6/9]  Retire legacy helper sudoers and override drop-ins
+  [6/9]  Install helper sudoers and retire stale override drop-ins
   [7/9]  Generate SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD in .env
   [8/9]  Build and deploy the helper, reload systemd, bring up panel containers, run migrations
   [9/9]  Run scripts/doctor.sh and fail fast if anything looks wrong
@@ -737,7 +755,7 @@ if [ "${SKIP_SYSTEM_DEPS:-0}" = "1" ]; then
 else
   log_info "[1/9] Installing system dependencies..."
   apt-get update -qq
-  apt-get install -y -qq tmux curl openssl bc
+  apt-get install -y -qq sudo tmux curl openssl bc
 
   # Install Docker if not present
   if ! command -v docker &>/dev/null; then
@@ -806,16 +824,19 @@ else
   log_ok "User hytale already exists"
 fi
 
-if ! id "hytale-helper" &>/dev/null; then
-  useradd -r -s /usr/sbin/nologin -g "$PANEL_SOCKET_GROUP" -G hytale hytale-helper
-  log_ok "Created user: hytale-helper"
-else
-  log_ok "User hytale-helper already exists"
+if ! getent group hytale >/dev/null; then
+  groupadd -r hytale
+  log_ok "Created group: hytale"
 fi
+usermod -aG hytale hytale
 
-# Keep the legacy hytale-helper account aligned for older deployments that still
-# have files owned by it, even though the shipped helper service now runs as root.
-usermod -g "$PANEL_SOCKET_GROUP" -aG hytale hytale-helper 2>/dev/null || true
+if ! id "$HELPER_USER" &>/dev/null; then
+  useradd -r -d /opt/hytale-panel/helper -s /usr/sbin/nologin -g "$PANEL_SOCKET_GROUP" -G hytale "$HELPER_USER"
+  log_ok "Created user: $HELPER_USER"
+else
+  usermod -g "$PANEL_SOCKET_GROUP" -aG hytale "$HELPER_USER"
+  log_ok "User $HELPER_USER already exists"
+fi
 
 # ─── Step 3: Hytale World Auto-Detection ───────────────────
 log_info "[3/9] Detecting or selecting the Hytale server directory..."
@@ -841,16 +862,20 @@ chown hytale:hytale /opt/hytale
 if [ -d "$HYTALE_SERVER_PATH" ]; then
   chown -R hytale:hytale "$HYTALE_SERVER_PATH" 2>/dev/null || \
     log_warn "Could not chown $HYTALE_SERVER_PATH — ensure the hytale user can read/write game files"
+  chmod -R g+rwX "$HYTALE_SERVER_PATH" 2>/dev/null || \
+    log_warn "Could not make $HYTALE_SERVER_PATH group-writable — ensure $HELPER_USER can manage game files"
+  find "$HYTALE_SERVER_PATH" -type d -exec chmod g+s {} + 2>/dev/null || \
+    log_warn "Could not set setgid bits under $HYTALE_SERVER_PATH — new files may not stay in group hytale"
 fi
 chown hytale:hytale /opt/hytale/run
-chmod 770 /opt/hytale/run
+chmod 2770 /opt/hytale/run
 chown hytale:hytale /opt/hytale/tmp
-chmod 770 /opt/hytale/tmp
+chmod 2770 /opt/hytale/tmp
 chown hytale:hytale /opt/hytale-backups
-chmod 770 /opt/hytale-backups                    # hytale + helper supplementary group access
+chmod 2770 /opt/hytale-backups                   # hytale + helper supplementary group access
 chown -R root:"$PANEL_SOCKET_GROUP" /opt/hytale-panel/helper
 chmod 750 /opt/hytale-panel/helper
-chown root:"$PANEL_SOCKET_GROUP" "$HELPER_RUNTIME_DIR"
+chown "$HELPER_USER:$PANEL_SOCKET_GROUP" "$HELPER_RUNTIME_DIR"
 chmod 770 "$HELPER_RUNTIME_DIR"
 
 log_ok "Directories created with correct permissions"
@@ -864,15 +889,11 @@ retire_legacy_helper_override
 
 log_ok "Systemd units installed"
 
-# ─── Step 6: Retire Legacy Helper Overrides ────────────────
-log_info "[6/9] Retiring legacy helper overrides..."
+# ─── Step 6: Helper Sudoers + Override Cleanup ──────────────
+log_info "[6/9] Installing helper sudoers and retiring stale overrides..."
 
-if [ -f /etc/sudoers.d/hytale-helper ]; then
-  rm -f /etc/sudoers.d/hytale-helper
-  log_ok "Removed legacy /etc/sudoers.d/hytale-helper (helper now runs as root with a local-only sandbox)"
-else
-  log_ok "No legacy helper sudoers file present"
-fi
+install_helper_sudoers
+log_ok "Installed narrow /etc/sudoers.d/hytale-helper rules"
 
 # ─── Step 7: Generate Secrets ──────────────────────────────
 log_info "[7/9] Generating cryptographic secrets..."
@@ -903,7 +924,7 @@ set_env_var "$PANEL_DIR/.env" PANEL_SOCKET_GID "$PANEL_SOCKET_GID"
 
 # Lock down panel .env — contains SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD.
 # Install-time umask may leave it 0644 (world-readable); force 0600 so local users on the host
-# cannot read the helper HMAC secret and forge RPC against the root helper socket.
+# cannot read the helper HMAC secret and forge RPC against the helper socket.
 chmod 600 "$PANEL_DIR/.env"
 chown root:root "$PANEL_DIR/.env"
 
@@ -1102,7 +1123,7 @@ echo "  Installation Complete!"
 echo "============================================"
 echo ""
 echo "What is ready now:"
-echo "  - hytale-helper.service installed with the shipped root helper model"
+echo "  - hytale-helper.service installed with the shipped dedicated non-root helper model"
 echo "  - Legacy hytale.service retired automatically if it existed"
 if [ "${SKIP_PANEL_BRINGUP:-0}" = "1" ]; then
   echo "  - Panel container bring-up was skipped on purpose"
@@ -1142,7 +1163,7 @@ echo ""
 echo "Security reminders:"
 printf '  - API binds to 127.0.0.1:%s only — never exposed directly\n' "$FINAL_API_HOST_PORT"
 echo "  - Always use TLS via reverse proxy"
-echo "  - Helper runs as root with a local-only systemd sandbox and HMAC-authenticated Unix socket"
+echo "  - Helper runs as non-root $HELPER_USER with narrow sudoers and an HMAC-authenticated Unix socket"
 echo "  - API container joins helper socket GID ${PANEL_SOCKET_GID} to reach /run/hytale-helper/hytale-helper.sock"
 echo "  - Host helper socket path is $HELPER_RUNTIME_DIR/hytale-helper.sock"
 echo ""

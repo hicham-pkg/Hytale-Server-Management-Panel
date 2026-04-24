@@ -34,6 +34,7 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [statsError, setStatsError] = useState('');
   const [recentCrashes, setRecentCrashes] = useState<CrashEvent[]>([]);
+  const [recentCrashesError, setRecentCrashesError] = useState('');
   const [actionLoading, setActionLoading] = useState('');
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -48,7 +49,13 @@ export default function DashboardPage() {
       }
     });
     apiGet<{ events: CrashEvent[] }>('/api/crashes?limit=5&status=active').then((res) => {
-      if (res.success && res.data) setRecentCrashes(res.data.events);
+      if (res.success && res.data) {
+        setRecentCrashes(res.data.events);
+        setRecentCrashesError('');
+      } else {
+        setRecentCrashes([]);
+        setRecentCrashesError(res.error ?? 'Recent warnings unavailable');
+      }
     });
   }, []);
 
@@ -243,7 +250,9 @@ export default function DashboardPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {recentCrashes.length === 0 ? (
+              {recentCrashesError ? (
+                <p className="text-sm text-muted-foreground">Recent warnings are unavailable right now.</p>
+              ) : recentCrashes.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No recent warnings</p>
               ) : (
                 <div className="space-y-2">

@@ -20,6 +20,10 @@ const auditServiceMock = vi.hoisted(() => ({
   logAudit: vi.fn(),
 }));
 
+const authState = vi.hoisted(() => ({
+  totpEnabled: false,
+}));
+
 const middlewareMock = vi.hoisted(() => ({
   requireAuth: vi.fn(),
   requireTotpEnrollmentSession: vi.fn(async (request: any) => {
@@ -28,7 +32,7 @@ const middlewareMock = vi.hoisted(() => ({
       id: 'admin-user-id',
       username: 'admin',
       role: 'admin',
-      totpEnabled: false,
+      totpEnabled: authState.totpEnabled,
     };
   }),
 }));
@@ -44,6 +48,7 @@ describe('setup TOTP route', () => {
     vi.resetModules();
     authServiceMock.setupTotp.mockReset();
     middlewareMock.requireTotpEnrollmentSession.mockClear();
+    authState.totpEnabled = false;
 
     process.env = {
       ...originalEnv,
@@ -104,6 +109,43 @@ describe('setup TOTP route', () => {
       },
     });
     expect(authServiceMock.setupTotp).toHaveBeenCalledWith('admin-user-id');
+
+    await app.close();
+  });
+
+  it('rejects setup when TOTP is already enabled without rotating the secret', async () => {
+    authState.totpEnabled = true;
+
+    const { authRoutes } = await import('../../packages/api/src/routes/auth.routes');
+    const { default: csrfPlugin } = await import('../../packages/api/src/plugins/csrf');
+
+    const app = Fastify({ trustProxy: true });
+    await app.register(fastifyCookie);
+    await app.register(fastifyRateLimit, {
+      max: 100,
+      timeWindow: 60_000,
+    });
+    await app.register(csrfPlugin);
+    await app.register(authRoutes);
+
+    const sessionId = 'pending-admin-session';
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/setup-totp',
+      headers: {
+        cookie: `hytale_session=${sessionId}`,
+        'content-type': 'application/json',
+        'x-csrf-token': generateCsrfToken('b'.repeat(64), sessionId),
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      success: false,
+      error: 'TOTP is already enabled for this account',
+    });
+    expect(authServiceMock.setupTotp).not.toHaveBeenCalled();
 
     await app.close();
   });

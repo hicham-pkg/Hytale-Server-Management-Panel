@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  echo "hytale-helper-journalctl: rejected arguments" >&2
+  exit 64
+}
+
+if [ "$#" -ne 7 ] && [ "$#" -ne 9 ]; then
+  fail
+fi
+
+[ "$1" = "-u" ] || fail
+[ "$2" = "hytale-tmux.service" ] || fail
+[ "$3" = "--no-pager" ] || fail
+[ "$4" = "-o" ] || fail
+
+case "$5" in
+  short-iso|cat) ;;
+  *) fail ;;
+esac
+
+[ "$6" = "-n" ] || fail
+[[ "$7" =~ ^[0-9]+$ ]] || fail
+
+if [ "$#" -eq 9 ]; then
+  [ "$8" = "--since" ] || fail
+  [[ "$9" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{3})?Z$ ]] || fail
+fi
+
+exec /usr/bin/journalctl "$@"

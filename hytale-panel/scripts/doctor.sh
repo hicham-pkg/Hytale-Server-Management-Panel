@@ -28,6 +28,9 @@ API_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 HYTALE_TMP_DIR="/opt/hytale/tmp"
 HELPER_OVERRIDE_DIR="/etc/systemd/system/hytale-helper.service.d"
 HELPER_OVERRIDE_FILE="${HELPER_OVERRIDE_DIR}/override.conf"
+HELPER_SUDOERS_FILE="/etc/sudoers.d/hytale-helper"
+HELPER_WRAPPER_DIR="/usr/local/lib/hytale-panel"
+HELPER_JOURNALCTL_WRAPPER="${HELPER_WRAPPER_DIR}/hytale-helper-journalctl"
 CONTAINER_API="hytale-panel-api"
 CONTAINER_WEB="hytale-panel-web"
 CONTAINER_DB="hytale-panel-db"
@@ -35,6 +38,7 @@ MIN_SECRET_LENGTH=32
 MIN_DISK_FREE_GB=2
 MIN_MEMORY_FREE_MB=128
 PANEL_SOCKET_GROUP="hytale-panel"
+HELPER_USER="hytale-helper"
 
 FIX=0
 VERBOSE=0
@@ -199,7 +203,8 @@ HELPER_SERVICE_ACTIVE=0
 HELPER_UNIT_CONFIG_OK=0
 HELPER_ENV_SOCKET_OK=0
 HELPER_OVERRIDE_CLEAN=0
-HELPER_RUNTIME_DIRECT_EXEC_OK=0
+HELPER_SUDOERS_OK=0
+HELPER_JOURNALCTL_WRAPPER_OK=0
 LEGACY_SERVICE_RETIRED=0
 HOST_HELPER_SOCKET_OK=0
 LEGACY_HOST_HELPER_SOCKET_EXISTS=0
@@ -429,9 +434,9 @@ check_services() {
   g="$(helper_unit_value Group)"
   sg="$(helper_unit_value SupplementaryGroups)"
   np="$(helper_unit_value NoNewPrivileges | tr '[:upper:]' '[:lower:]')"
-  if [ "$u" = "root" ] && [ "$g" = "hytale-panel" ] && printf '%s' "$sg" | grep -qw hytale && [ "$np" = "yes" ]; then
+  if [ "$u" = "$HELPER_USER" ] && [ "$g" = "hytale-panel" ] && printf '%s' "$sg" | grep -qw hytale && [ "$np" != "yes" ]; then
     HELPER_UNIT_CONFIG_OK=1
-    ok "Helper unit matches shipped model (root / hytale-panel / supp=hytale / NoNewPrivileges=true)"
+    ok "Helper unit matches shipped model ($HELPER_USER / hytale-panel / supp=hytale / sudo-capable)"
   else
     fail "Helper unit drift: user=$u group=$g supp=$sg NNP=$np" "sudo cp systemd/hytale-helper.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart hytale-helper.service"
   fi
@@ -443,11 +448,18 @@ check_services() {
     ok "No stale helper override.conf"
   fi
 
-  if [ -d "$HELPER_DEPLOY_DIR/dist" ] && find "$HELPER_DEPLOY_DIR/dist" -name '*.js' -exec grep -q '/usr/bin/sudo' {} + >/dev/null 2>&1; then
-    fail "Installed helper runtime still uses legacy sudo execution" "sudo bash deploy/deploy-helper.sh"
+  if [ -f "$HELPER_SUDOERS_FILE" ]; then
+    HELPER_SUDOERS_OK=1
+    ok "Helper sudoers rules are installed"
   else
-    HELPER_RUNTIME_DIRECT_EXEC_OK=1
-    ok "Helper runtime uses direct host execution (no legacy sudo)"
+    fail "Helper sudoers rules missing at $HELPER_SUDOERS_FILE" "sudo cp systemd/hytale-helper.sudoers $HELPER_SUDOERS_FILE && sudo chmod 440 $HELPER_SUDOERS_FILE"
+  fi
+
+  if [ -x "$HELPER_JOURNALCTL_WRAPPER" ] && [ "$(stat_owner "$HELPER_JOURNALCTL_WRAPPER")" = "root:root" ]; then
+    HELPER_JOURNALCTL_WRAPPER_OK=1
+    ok "Helper journalctl wrapper is installed"
+  else
+    fail "Helper journalctl wrapper missing or not root-owned at $HELPER_JOURNALCTL_WRAPPER" "sudo install -d -o root -g root -m 0755 $HELPER_WRAPPER_DIR && sudo install -o root -g root -m 0755 systemd/hytale-helper-journalctl $HELPER_JOURNALCTL_WRAPPER"
   fi
 
   if systemctl list-unit-files hytale.service >/dev/null 2>&1; then
@@ -779,11 +791,11 @@ check_config() {
   local run_mode run_owner deploy_mode deploy_owner
   run_mode="$(stat_mode "$HELPER_RUNTIME_DIR")"
   run_owner="$(stat_owner "$HELPER_RUNTIME_DIR")"
-  if [ "$run_mode" = "770" ] && [ "$run_owner" = "root:$PANEL_SOCKET_GROUP" ]; then
+  if [ "$run_mode" = "770" ] && [ "$run_owner" = "$HELPER_USER:$PANEL_SOCKET_GROUP" ]; then
     HELPER_RUNTIME_PERMS_OK=1
-    ok "$HELPER_RUNTIME_DIR is 770 root:$PANEL_SOCKET_GROUP"
+    ok "$HELPER_RUNTIME_DIR is 770 $HELPER_USER:$PANEL_SOCKET_GROUP"
   else
-    fail "$HELPER_RUNTIME_DIR has mode=$run_mode owner=$run_owner, expected 770 root:$PANEL_SOCKET_GROUP" "sudo chown root:$PANEL_SOCKET_GROUP $HELPER_RUNTIME_DIR && sudo chmod 770 $HELPER_RUNTIME_DIR"
+    fail "$HELPER_RUNTIME_DIR has mode=$run_mode owner=$run_owner, expected 770 $HELPER_USER:$PANEL_SOCKET_GROUP" "sudo chown $HELPER_USER:$PANEL_SOCKET_GROUP $HELPER_RUNTIME_DIR && sudo chmod 770 $HELPER_RUNTIME_DIR"
   fi
 
   deploy_mode="$(stat_mode "$HELPER_DEPLOY_DIR")"
@@ -822,7 +834,7 @@ check_resources() {
       fi
     fi
   else
-    warn "$BACKUP_PATH does not exist; skipping" "sudo mkdir -p $BACKUP_PATH && sudo chown hytale:hytale $BACKUP_PATH && sudo chmod 770 $BACKUP_PATH"
+    warn "$BACKUP_PATH does not exist; skipping" "sudo mkdir -p $BACKUP_PATH && sudo chown hytale:hytale $BACKUP_PATH && sudo chmod 2770 $BACKUP_PATH"
   fi
 
   local mem_avail_mb mem_total_mb
@@ -923,7 +935,8 @@ run_checks() {
   HELPER_UNIT_CONFIG_OK=0
   HELPER_ENV_SOCKET_OK=0
   HELPER_OVERRIDE_CLEAN=0
-  HELPER_RUNTIME_DIRECT_EXEC_OK=0
+  HELPER_SUDOERS_OK=0
+  HELPER_JOURNALCTL_WRAPPER_OK=0
   LEGACY_SERVICE_RETIRED=0
   HOST_HELPER_SOCKET_OK=0
   LEGACY_HOST_HELPER_SOCKET_EXISTS=0
@@ -984,6 +997,28 @@ perform_fixes() {
     fi
   fi
 
+  if [ "$HELPER_SUDOERS_OK" -eq 0 ] && [ -f "$ROOT_DIR/systemd/hytale-helper.sudoers" ]; then
+    if sudo install -d -o root -g root -m 0755 "$HELPER_WRAPPER_DIR" &&
+       sudo install -o root -g root -m 0755 "$ROOT_DIR/systemd/hytale-helper-journalctl" "$HELPER_JOURNALCTL_WRAPPER" &&
+       sudo cp "$ROOT_DIR/systemd/hytale-helper.sudoers" "$HELPER_SUDOERS_FILE" &&
+       sudo chown root:root "$HELPER_SUDOERS_FILE" &&
+       sudo chmod 440 "$HELPER_SUDOERS_FILE"; then
+      if command -v visudo >/dev/null 2>&1; then
+        sudo visudo -cf "$HELPER_SUDOERS_FILE" >/dev/null 2>&1 || true
+      fi
+      printf '  %s✓%s reinstalled helper sudoers rules\n' "$COLOR_GREEN" "$COLOR_RESET"
+      repairs=$((repairs + 1))
+    fi
+  fi
+
+  if [ "$HELPER_JOURNALCTL_WRAPPER_OK" -eq 0 ] && [ -f "$ROOT_DIR/systemd/hytale-helper-journalctl" ]; then
+    if sudo install -d -o root -g root -m 0755 "$HELPER_WRAPPER_DIR" &&
+       sudo install -o root -g root -m 0755 "$ROOT_DIR/systemd/hytale-helper-journalctl" "$HELPER_JOURNALCTL_WRAPPER"; then
+      printf '  %s✓%s reinstalled helper journalctl wrapper\n' "$COLOR_GREEN" "$COLOR_RESET"
+      repairs=$((repairs + 1))
+    fi
+  fi
+
   if [ "$HELPER_ENV_SOCKET_OK" -eq 0 ] && [ -f "$HELPER_ENV_FILE" ]; then
     if sudo sed -i -E "s|^HELPER_SOCKET_PATH=.*|HELPER_SOCKET_PATH=${EXPECTED_HOST_HELPER_SOCKET_PATH}|" "$HELPER_ENV_FILE" &&
        sudo chown "root:$PANEL_SOCKET_GROUP" "$HELPER_ENV_FILE" &&
@@ -1008,8 +1043,8 @@ perform_fixes() {
   fi
 
   if [ "$HELPER_RUNTIME_PERMS_OK" -eq 0 ] && [ -d "$HELPER_RUNTIME_DIR" ]; then
-    if sudo chown "root:$PANEL_SOCKET_GROUP" "$HELPER_RUNTIME_DIR" && sudo chmod 770 "$HELPER_RUNTIME_DIR"; then
-      printf '  %s✓%s reset %s to 770 root:%s\n' "$COLOR_GREEN" "$COLOR_RESET" "$HELPER_RUNTIME_DIR" "$PANEL_SOCKET_GROUP"
+    if sudo chown "$HELPER_USER:$PANEL_SOCKET_GROUP" "$HELPER_RUNTIME_DIR" && sudo chmod 770 "$HELPER_RUNTIME_DIR"; then
+      printf '  %s✓%s reset %s to 770 %s:%s\n' "$COLOR_GREEN" "$COLOR_RESET" "$HELPER_RUNTIME_DIR" "$HELPER_USER" "$PANEL_SOCKET_GROUP"
       repairs=$((repairs + 1))
     fi
   fi

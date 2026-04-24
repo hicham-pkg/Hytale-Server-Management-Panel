@@ -25,6 +25,7 @@ export default function AuditPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const fetchLogs = async (p: number) => {
     setLoading(true);
@@ -32,6 +33,11 @@ export default function AuditPage() {
     if (res.success && res.data) {
       setLogs(res.data.logs);
       setTotal(res.data.total);
+      setError('');
+    } else {
+      setLogs([]);
+      setTotal(0);
+      setError(res.error || 'Failed to fetch audit logs');
     }
     setLoading(false);
   };
@@ -68,8 +74,15 @@ export default function AuditPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {error && (
+              <div className="mb-4 rounded-md border border-red-800 bg-red-900/20 px-3 py-2 text-sm text-red-400">
+                {error}
+              </div>
+            )}
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading...</p>
+            ) : error ? (
+              <p className="text-sm text-muted-foreground">Audit logs are unavailable right now.</p>
             ) : logs.length === 0 ? (
               <p className="text-sm text-muted-foreground">No audit logs yet</p>
             ) : (

@@ -10,7 +10,7 @@ This panel is designed for a **single VPS, small admin team** (1–3 users) scen
 |------|-----------|------------|-----------|
 | Zone 0 | Browser | Untrusted | None — all input validated server-side |
 | Zone 1 | Docker containers (API + DB) | Low trust | No root, no host filesystem (except Unix socket mount) |
-| Zone 2 | Helper service | Medium trust | Local-only root helper with systemd sandbox, HMAC auth, and allowlisted operations |
+| Zone 2 | Helper service | Medium trust | Dedicated non-root helper user with HMAC auth, allowlisted operations, and narrow sudoers for service/journal access |
 | Zone 3 | Game server | Isolated | Runs as dedicated `hytale` user |
 
 ### Key Threats and Mitigations
@@ -23,7 +23,7 @@ This panel is designed for a **single VPS, small admin team** (1–3 users) scen
 | **Session theft** | HttpOnly/Secure/SameSite cookies; admin idle timeout 15 min; readonly idle timeout 60 min; 4h absolute lifetime |
 | **Brute force** | API login rate limiting (5 attempts/15 min per IP) + nginx login rate limiting + account lockout (10 fails → 30 min) |
 | **WebSocket auth bypass** | Session cookie validated on WS upgrade; explicit `WS_ALLOWED_ORIGINS`; message and connection rate limits |
-| **Privilege escalation** | HMAC-signed helper requests with timestamp; local-only root helper with systemd sandbox; direct allowlisted `systemctl`/`journalctl` only; non-root Docker |
+| **Privilege escalation** | HMAC-signed helper requests with timestamp; non-root helper; exact allowlisted `systemctl` sudoers plus a validating `journalctl` wrapper; non-root Docker |
 | **Backup restore abuse** | Server-stopped precondition; automatic safety snapshot before restore |
 | **XSS via logs** | ANSI stripping; React default escaping; no `dangerouslySetInnerHTML`; baseline CSP on web responses (currently allows `'unsafe-inline'` scripts for Next.js runtime compatibility) |
 | **Docker escape** | Non-root container; no `--privileged`; only Unix socket mounted |
@@ -123,11 +123,11 @@ Admin accounts must enroll TOTP before they receive a fully authenticated sessio
 | `/opt/hytale/Server/` | hytale | hytale | 755 | Server data |
 | `/opt/hytale/Server/whitelist.json` | hytale | hytale | 664 | Whitelist (helper writes via group) |
 | `/opt/hytale/Server/bans.json` | hytale | hytale | 664 | Bans (helper writes via group) |
-| `/opt/hytale-backups/` | hytale | hytale | 770 | Backup storage (helper writes via group) |
+| `/opt/hytale-backups/` | hytale | hytale | 2770 | Backup storage (helper writes via group; setgid keeps group ownership) |
 | `/opt/hytale-panel/helper/` | root | hytale-panel | 750 | Helper service code |
 | `/opt/hytale-panel/helper/.env` | root | hytale-panel | 640 | Helper secrets |
-| `/opt/hytale-panel/run/` | root | hytale-panel | 770 | Stable helper socket directory |
-| `/opt/hytale-panel/run/hytale-helper.sock` | root | hytale-panel | 660 | Host helper Unix socket |
+| `/opt/hytale-panel/run/` | hytale-helper | hytale-panel | 770 | Stable helper socket directory |
+| `/opt/hytale-panel/run/hytale-helper.sock` | hytale-helper | hytale-panel | 660 | Host helper Unix socket |
 
 The API container stays non-root (`1000:1000`) and joins the numeric group from `.env` (`PANEL_SOCKET_GID`, default `2001`). Docker bind-mounts the stable host helper socket directory from `/opt/hytale-panel/run` into the container at `/run/hytale-helper`, so helper restarts do not require manual socket-path surgery.
 

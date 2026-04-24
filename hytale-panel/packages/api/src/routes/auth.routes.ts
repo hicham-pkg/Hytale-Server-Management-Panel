@@ -143,12 +143,18 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post('/api/auth/setup-totp', { preHandler: [requireTotpEnrollmentSession] }, async (request, reply) => {
     SetupTotpSchema.parse(request.body ?? {});
+    if (request.currentUser!.totpEnabled) {
+      return reply.status(409).send({ success: false, error: 'TOTP is already enabled for this account' });
+    }
     const result = await authService.setupTotp(request.currentUser!.id);
     return reply.send({ success: true, data: result });
   });
 
   fastify.post('/api/auth/confirm-totp', { preHandler: [requireTotpEnrollmentSession] }, async (request, reply) => {
     const body = ConfirmTotpSchema.parse(request.body);
+    if (request.currentUser!.totpEnabled) {
+      return reply.status(409).send({ success: false, error: 'TOTP is already enabled for this account' });
+    }
     const result = await authService.confirmTotp(request.currentUser!.id, body.code, request.sessionId);
 
     await logAudit({

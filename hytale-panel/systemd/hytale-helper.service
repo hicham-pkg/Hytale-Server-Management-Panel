@@ -1,13 +1,13 @@
 # ============================================================
-# Hytale Panel — Privileged Helper Service
+# Hytale Panel — Host Helper Service
 # ============================================================
 # This service runs on the HOST (not in Docker) and provides
 # a Unix socket API for the panel to execute privileged
 # operations: systemctl, tmux, file I/O, backups.
 #
-# It runs as root with a tight systemd sandbox (bounded capability set,
-# @system-service syscall allowlist, NoNewPrivileges) so it can manage
-# hytale-tmux.service directly without brittle sudo escalation paths.
+# It runs as a dedicated non-root hytale-helper user with a tight local-only systemd
+# sandbox. Service control and journal reads are delegated through the
+# narrow sudoers rules in hytale-helper.sudoers.
 # Only the panel API container can connect to its Unix socket.
 #
 # Host socket path: /opt/hytale-panel/run/hytale-helper.sock
@@ -22,17 +22,17 @@
 # ============================================================
 
 [Unit]
-Description=Hytale Panel Privileged Helper
+Description=Hytale Panel Host Helper
 After=network.target
 Documentation=https://github.com/your-repo/hytale-panel
 
 [Service]
 Type=simple
-User=root
+User=hytale-helper
 Group=hytale-panel
 SupplementaryGroups=hytale
 WorkingDirectory=/opt/hytale-panel/helper
-ExecStartPre=/usr/bin/install -d -o root -g hytale-panel -m 0770 /opt/hytale-panel/run
+ExecStartPre=+/usr/bin/install -d -o hytale-helper -g hytale-panel -m 0770 /opt/hytale-panel/run
 ExecStart=/usr/bin/node /opt/hytale-panel/helper/dist/index.js
 Restart=always
 RestartSec=5
@@ -41,22 +41,19 @@ RestartSec=5
 EnvironmentFile=/opt/hytale-panel/helper/.env
 
 # Security hardening
-# Runs as UID 0, but a bounded cap set + syscall allowlist keep the blast
-# radius of any helper compromise small. The helper's privileged work goes
-# through systemctl (D-Bus to PID 1) and through SupplementaryGroups=hytale
-# (which grants access to /opt/hytale-owned files via group perms) — neither
-# path needs CAP_DAC_OVERRIDE or CAP_SYS_ADMIN.
-NoNewPrivileges=true
-CapabilityBoundingSet=CAP_KILL CAP_DAC_READ_SEARCH
+# The helper itself is non-root. Sudo is required only for exact systemctl
+# commands and the validating journalctl wrapper in /etc/sudoers.d/hytale-helper.
+# Do not set NoNewPrivileges/RestrictSUIDSGID: sudo needs the setuid transition.
 AmbientCapabilities=
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-RestrictSUIDSGID=true
 RestrictRealtime=true
 PrivateDevices=true
 ProtectClock=true
 ProtectHostname=true
-UMask=0077
+# Group-readable/writable files are intentional: backup and restore artifacts
+# must remain accessible to the hytale game-server user through group perms.
+UMask=0007
 ProtectSystem=strict
 ProtectHome=true
 ProtectControlGroups=true

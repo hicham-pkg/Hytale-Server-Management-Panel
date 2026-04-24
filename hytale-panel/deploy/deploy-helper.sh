@@ -68,14 +68,18 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY_DIR="/opt/hytale-panel/helper"
 PANEL_SOCKET_GROUP="hytale-panel"
+HELPER_USER="hytale-helper"
 ROOT_ENV_FILE="$SCRIPT_DIR/.env"
 HELPER_ENV_FILE="/opt/hytale-panel/helper/.env"
+HELPER_WRAPPER_DIR="/usr/local/lib/hytale-panel"
+HELPER_JOURNALCTL_WRAPPER="${HELPER_WRAPPER_DIR}/hytale-helper-journalctl"
 HOST_HELPER_RUNTIME_DIR="/opt/hytale-panel/run"
 HOST_HELPER_SOCKET_PATH="${HOST_HELPER_RUNTIME_DIR}/hytale-helper.sock"
 LEGACY_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 API_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 HELPER_OVERRIDE_DIR="/etc/systemd/system/hytale-helper.service.d"
 HELPER_OVERRIDE_FILE="${HELPER_OVERRIDE_DIR}/override.conf"
+HELPER_SUDOERS_FILE="/etc/sudoers.d/hytale-helper"
 API_HOST_PORT="${API_HOST_PORT:-$(read_env_value "$ROOT_ENV_FILE" API_HOST_PORT || true)}"
 API_HOST_PORT="${API_HOST_PORT:-4000}"
 STAGING_DIR="$(mktemp -d /tmp/hytale-helper-deploy.XXXXXX)"
@@ -93,6 +97,26 @@ set_env_var() {
     sed -i "s|^${key}=.*|${key}=${escaped}|" "$file"
   else
     printf '\n%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
+ensure_helper_user() {
+  if ! getent group "$PANEL_SOCKET_GROUP" >/dev/null; then
+    log_error "Missing group $PANEL_SOCKET_GROUP. Run sudo ./install.sh first."
+    exit 1
+  fi
+
+  if ! getent group hytale >/dev/null; then
+    log_error "Missing group hytale. Run sudo ./install.sh first."
+    exit 1
+  fi
+
+  if ! id "$HELPER_USER" >/dev/null 2>&1; then
+    useradd -r -d "$DEPLOY_DIR" -s /usr/sbin/nologin -g "$PANEL_SOCKET_GROUP" -G hytale "$HELPER_USER"
+    log_ok "Created user: $HELPER_USER"
+  else
+    usermod -g "$PANEL_SOCKET_GROUP" -aG hytale "$HELPER_USER"
+    log_ok "User $HELPER_USER is present"
   fi
 }
 
@@ -161,7 +185,7 @@ migrate_helper_env_socket_path() {
   local current_socket_path
 
   mkdir -p "$HOST_HELPER_RUNTIME_DIR"
-  chown root:"$PANEL_SOCKET_GROUP" "$HOST_HELPER_RUNTIME_DIR"
+  chown "$HELPER_USER:$PANEL_SOCKET_GROUP" "$HOST_HELPER_RUNTIME_DIR"
   chmod 770 "$HOST_HELPER_RUNTIME_DIR"
 
   if [ ! -f "$HELPER_ENV_FILE" ]; then
@@ -187,6 +211,19 @@ remove_legacy_helper_socket_if_safe() {
   if [ -S "$LEGACY_HELPER_SOCKET_PATH" ] && [ -S "$HOST_HELPER_SOCKET_PATH" ]; then
     rm -f "$LEGACY_HELPER_SOCKET_PATH"
     log_ok "Removed stale legacy helper socket at $LEGACY_HELPER_SOCKET_PATH"
+  fi
+}
+
+install_helper_sudoers() {
+  install -d -o root -g root -m 0755 "$HELPER_WRAPPER_DIR"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/systemd/hytale-helper-journalctl" "$HELPER_JOURNALCTL_WRAPPER"
+
+  cp "$SCRIPT_DIR/systemd/hytale-helper.sudoers" "$HELPER_SUDOERS_FILE"
+  chown root:root "$HELPER_SUDOERS_FILE"
+  chmod 440 "$HELPER_SUDOERS_FILE"
+
+  if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "$HELPER_SUDOERS_FILE" >/dev/null
   fi
 }
 
@@ -233,6 +270,8 @@ log_ok "Files deployed"
 # ─── Restart service ───────────────────────────────────────
 log_info "Refreshing the shipped helper unit and migrating older installs..."
 cp "$SCRIPT_DIR/systemd/hytale-helper.service" /etc/systemd/system/
+ensure_helper_user
+install_helper_sudoers
 retire_legacy_helper_override
 migrate_helper_env_socket_path
 systemctl daemon-reload

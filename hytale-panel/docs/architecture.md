@@ -35,7 +35,7 @@ This document describes the architecture for a self-hosted, production-grade web
 
 **Key architectural decisions:**
 - **systemd + tmux** for game server management (enables live console I/O)
-- **Local-only privileged helper service** (not sudoers) for host operations
+- **Local-only dedicated non-root helper service** with HMAC auth, narrow sudoers for service control, and a validating journal wrapper
 - **Docker Compose** for panel services (API + frontend + PostgreSQL)
 - **WebSocket** for real-time log streaming and console interaction
 - **Argon2** password hashing, admin-required TOTP 2FA, strict session management
@@ -47,7 +47,7 @@ This document describes the architecture for a self-hosted, production-grade web
 ### Difficult/Critical Requirements
 
 1. **Live console command sending** — Hytale has no known RCON protocol. The game server's stdin must be written to directly. Pure systemd does not expose stdin. Solution: wrap the server in a tmux session managed by a custom systemd unit.
-2. **Privilege separation** — The panel backend must not run as root, yet it needs to control systemd services and read journalctl. Solution: a dedicated local-only helper service running as root with a strict systemd sandbox, HMAC-authenticated Unix socket, and allowlisted host operations only.
+2. **Privilege separation** — The panel backend must not run as root, yet it needs to control systemd services and read journalctl. Solution: a dedicated local-only helper service running as `hytale-helper` with an HMAC-authenticated Unix socket, allowlisted host operations, membership in the `hytale` group for game files, exact sudoers for service control, and a root-owned validating wrapper for journal reads.
 3. **Backup/restore safety** — Restoring while the server is running could corrupt worlds. Solution: enforce server-stopped precondition and automatic safety snapshots.
 4. **Security of WebSocket** — Must authenticate WS connections with the same session tokens as HTTP, and rate-limit.
 5. **Path traversal prevention** — Backup restore/delete/list operations must be confined to allowlisted directories.
@@ -106,8 +106,8 @@ This document describes the architecture for a self-hosted, production-grade web
 │                     HOST OS (Trust Zone 2)                           │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  hytale-helper.service (Privileged Helper)                   │   │
-│  │  - Runs as root with primary group 'hytale-panel'           │   │
+│  │  hytale-helper.service (Host Helper)                         │   │
+│  │  - Runs as 'hytale-helper' with primary group 'hytale-panel' │   │
 │  │  - Supplementary group 'hytale' for game file access        │   │
 │  │  - Listens ONLY on Unix socket                               │   │
 │  │  - Allowlisted operations only                               │   │
@@ -136,7 +136,7 @@ This document describes the architecture for a self-hosted, production-grade web
 | **Next.js Frontend** | UI rendering, form validation, WebSocket client, no direct host access |
 | **Fastify API** | Authentication, authorization, session management, audit logging, input validation, proxies requests to helper |
 | **PostgreSQL** | Users, sessions, audit logs, backup metadata, crash history, settings |
-| **Privileged Helper** | Executes allowlisted host operations, reads/writes game files, manages tmux/systemd |
+| **Host Helper** | Executes allowlisted host operations, reads/writes game files, manages tmux/systemd |
 | **hytale-tmux.service** | Runs the actual Hytale game server inside a tmux session |
 
 ---
@@ -160,7 +160,7 @@ This document describes the architecture for a self-hosted, production-grade web
 | Browser → API WS | WSS (via reverse proxy) | Session token in first message or cookie | Message schema validation |
 | API → PostgreSQL | TCP (Docker internal) | PostgreSQL credentials | Parameterized queries (Drizzle ORM) |
 | API → Helper | Unix Domain Socket | HMAC-SHA256 signed requests with shared secret + timestamp | Allowlisted operation enum + Zod validation |
-| Helper → systemd | subprocess (systemctl) | Helper runs as local-only root with a systemd sandbox | Hardcoded command templates, no string interpolation |
+| Helper → systemd | subprocess (sudo systemctl/journalctl) | Helper runs as `hytale` and sudoers permits only exact allowlisted service/journal commands | Hardcoded command templates, no string interpolation |
 | Helper → tmux | subprocess (tmux send-keys) | Helper is member of 'hytale' group | Command sanitization, character allowlist |
 | Helper → filesystem | Node.js fs | Helper user has group read/write on /opt/hytale | Path allowlist, realpath resolution, no symlink following |
 
@@ -200,10 +200,11 @@ This document describes the architecture for a self-hosted, production-grade web
 | User | Purpose | Groups |
 |------|---------|--------|
 | `hytale` | Runs the game server | `hytale` |
-| `root` | Runs the helper service | Primary: `hytale-panel`, supplementary: `hytale` |
+| `hytale` | Runs the game server | Primary: `hytale` |
+| `hytale-helper` | Runs the helper service | Primary: `hytale-panel`, supplementary: `hytale` |
 | API container user `1000:1000` | Runs the API container | Supplementary numeric group `PANEL_SOCKET_GID` for socket access only |
 
-The shipped helper now runs as local-only `root` and executes the same narrow allowlisted operations directly. The legacy `hytale-helper.sudoers` file is kept in the repo only as a migration reference for older installs and is no longer installed by default.
+The shipped helper runs as the dedicated non-root `hytale-helper` user. It uses `/etc/sudoers.d/hytale-helper` only for exact `systemctl` calls and `/usr/local/lib/hytale-panel/hytale-helper-journalctl`, a root-owned wrapper that validates journal arguments before invoking `journalctl`. Tmux and filesystem operations run unprivileged through `hytale` group permissions.
 
 ---
 
@@ -357,7 +358,7 @@ The helper service provides a clean, auditable, validatable boundary between the
 | Vector | Mitigation |
 |--------|-----------|
 | API → Helper | HMAC-signed requests; helper validates signature + timestamp (±30s window) |
-| Helper → root | Local-only root helper with a systemd sandbox and allowlisted direct execution |
+| Helper → sudoers | Non-root helper with exact allowlisted `systemctl` sudoers entries plus a validating journal wrapper |
 | Docker escape | Container runs as non-root; no `--privileged`; only Unix socket mounted |
 | Role bypass | Server-side role check on every endpoint; no client-side-only authorization |
 
@@ -425,7 +426,7 @@ The helper service provides a clean, auditable, validatable boundary between the
 | R7 | XSS via log content | Medium | Medium | HTML escaping, CSP, no innerHTML | Very Low |
 | R8 | Docker container escape | Very Low | Critical | Non-root container, no privileged mode | Very Low |
 | R9 | Hytale server crash undetected | Medium | Medium | Crash pattern detection, health polling | Low |
-| R10 | TOTP secret theft | Very Low | High | Encrypted storage, shown once on setup | Very Low |
+| R10 | TOTP secret theft | Very Low | High | DB-backed secret storage, shown during setup, protected by host/DB access controls | Low |
 | R11 | Denial of service via WS flood | Medium | Low | Connection limits, message rate limits | Low |
 | R12 | Stale session after admin removal | Low | Medium | Session invalidation on user change | Very Low |
 
@@ -566,7 +567,7 @@ node-cron job (every 5 minutes):
 
 ### Primary Interactions
 
-1. **Login** — Admin enters username + password → optional TOTP → redirected to dashboard
+1. **Login** — Admin enters username + password → admin TOTP enrollment/verification → redirected to dashboard
 2. **Dashboard check** — View server status, uptime, resource usage, recent warnings at a glance
 3. **Start/Stop/Restart** — Click button → confirmation modal → action executes → result shown with audit entry
 4. **Live console** — View scrolling log output → type command in input → press Enter → see result in log stream
@@ -609,7 +610,7 @@ node-cron job (every 5 minutes):
 | username | VARCHAR(50) | UNIQUE, NOT NULL |
 | password_hash | VARCHAR(255) | NOT NULL |
 | role | VARCHAR(20) | NOT NULL, CHECK (role IN ('admin', 'readonly')) |
-| totp_secret | VARCHAR(255) | NULLABLE, encrypted |
+| totp_secret | VARCHAR(255) | NULLABLE, Base32 TOTP secret |
 | totp_enabled | BOOLEAN | DEFAULT false |
 | failed_login_attempts | INTEGER | DEFAULT 0 |
 | locked_until | TIMESTAMP | NULLABLE |
@@ -875,8 +876,8 @@ hytale-panel/
 │
 ├── systemd/
 │   ├── hytale-tmux.service             # Game server tmux wrapper
-│   ├── hytale-helper.service           # Privileged helper service
-│   └── hytale-helper.sudoers           # Legacy reference only; not installed by default
+│   ├── hytale-helper.service           # Non-root host helper service
+│   └── hytale-helper.sudoers           # Narrow helper sudoers rules
 │
 ├── packages/
 │   ├── shared/                         # Shared types and schemas

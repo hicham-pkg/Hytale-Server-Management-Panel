@@ -112,7 +112,11 @@ export async function createHelperServer() {
 
   await fastify.listen({ path: config.socketPath });
 
-  if (typeof process.getuid === 'function' && typeof process.getgid === 'function') {
+  if (
+    typeof process.getuid === 'function' &&
+    typeof process.getgid === 'function' &&
+    process.getuid() === 0
+  ) {
     fs.chownSync(config.socketPath, process.getuid(), process.getgid());
   }
 

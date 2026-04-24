@@ -17,6 +17,7 @@ const deleteReturningMock = vi.hoisted(() => vi.fn());
 const deleteWhereMock = vi.hoisted(() => vi.fn());
 const selectLimitMock = vi.hoisted(() => vi.fn());
 const selectWhereNoLimitMock = vi.hoisted(() => vi.fn());
+const executeMock = vi.hoisted(() => vi.fn());
 
 const schemaMock = vi.hoisted(() => ({
   users: {
@@ -32,44 +33,50 @@ const schemaMock = vi.hoisted(() => ({
   },
 }));
 
-const dbMock = vi.hoisted(() => ({
-  select: vi.fn((selection?: unknown) => ({
-    from: vi.fn(() => ({
-      where: vi.fn(() => {
-        // Two shapes: { count }.from(users).where(...)  -> returns adminCountRows
-        //             { id, role }.from(users).where(...).limit(1) -> targetUserRows
-        const isCountShape =
-          selection && typeof selection === 'object' && 'count' in (selection as Record<string, unknown>);
-        if (isCountShape) {
-          return selectWhereNoLimitMock();
-        }
+const dbMock = vi.hoisted(() => {
+  const mock = {
+    execute: executeMock,
+    select: vi.fn((selection?: unknown) => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => {
+          // Two shapes: { count }.from(users).where(...)  -> returns adminCountRows
+          //             { id, role }.from(users).where(...).limit(1) -> targetUserRows
+          const isCountShape =
+            selection && typeof selection === 'object' && 'count' in (selection as Record<string, unknown>);
+          if (isCountShape) {
+            return selectWhereNoLimitMock();
+          }
+          return {
+            limit: selectLimitMock,
+          };
+        }),
+      })),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => ({
+          returning: updateReturningMock,
+        })),
+      })),
+    })),
+    delete: vi.fn((table: unknown) => {
+      if (table === schemaMock.sessions) {
         return {
-          limit: selectLimitMock,
+          where: deleteWhereMock,
         };
-      }),
-    })),
-  })),
-  update: vi.fn(() => ({
-    set: vi.fn(() => ({
-      where: vi.fn(() => ({
-        returning: updateReturningMock,
-      })),
-    })),
-  })),
-  delete: vi.fn((table: unknown) => {
-    if (table === schemaMock.sessions) {
-      return {
-        where: deleteWhereMock,
-      };
-    }
+      }
 
-    return {
-      where: vi.fn(() => ({
-        returning: deleteReturningMock,
-      })),
-    };
-  }),
-}));
+      return {
+        where: vi.fn(() => ({
+          returning: deleteReturningMock,
+        })),
+      };
+    }),
+    transaction: vi.fn(),
+  };
+  mock.transaction.mockImplementation(async (callback: (tx: typeof mock) => unknown) => callback(mock));
+  return mock;
+});
 
 const logAuditMock = vi.hoisted(() => vi.fn());
 
@@ -110,6 +117,8 @@ describe('user routes missing-target correctness', () => {
     deleteWhereMock.mockReset().mockResolvedValue(undefined);
     selectLimitMock.mockReset().mockImplementation(async () => dbState.targetUserRows);
     selectWhereNoLimitMock.mockReset().mockImplementation(async () => dbState.adminCountRows);
+    executeMock.mockReset().mockResolvedValue(undefined);
+    dbMock.transaction.mockClear();
     logAuditMock.mockReset();
   });
 
@@ -135,6 +144,7 @@ describe('user routes missing-target correctness', () => {
         success: false,
       })
     );
+    expect(dbMock.transaction).toHaveBeenCalled();
 
     await app.close();
   });
@@ -225,6 +235,7 @@ describe('user routes missing-target correctness', () => {
       })
     );
     expect(deleteReturningMock).not.toHaveBeenCalled();
+    expect(dbMock.transaction).toHaveBeenCalled();
 
     await app.close();
   });

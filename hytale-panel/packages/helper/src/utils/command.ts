@@ -4,8 +4,11 @@ import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
 const SAFE_SYSTEMD_UNIT_REGEX = /^[A-Za-z0-9_.@-]+\.service$/;
+const ALLOWED_SERVICE_NAME = 'hytale-tmux.service';
 const ALLOWED_SYSTEMCTL_ACTIONS = new Set(['status', 'stop', 'reset-failed', 'restart']);
 const ALLOWED_JOURNAL_OUTPUTS = new Set(['short-iso', 'cat']);
+const JOURNALCTL_WRAPPER = '/usr/local/lib/hytale-panel/hytale-helper-journalctl';
+const ISO_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 export interface CommandResult {
   stdout: string;
@@ -42,8 +45,8 @@ export async function safeExec(
 
 /**
  * Execute an allowlisted host command with exact arguments (no shell).
- * The shipped helper model runs as local-only root, so the normal path is a
- * direct execFile call. The older sudo-based path is intentionally retired.
+ * The helper normally runs as non-root and uses sudoers for this tiny set of
+ * host-control commands. Root execution is kept for tests/manual runs.
  */
 export async function runAllowlistedCommand(
   command: string,
@@ -54,9 +57,9 @@ export async function runAllowlistedCommand(
     if (
       args.length === 2 &&
       ALLOWED_SYSTEMCTL_ACTIONS.has(args[0]) &&
-      SAFE_SYSTEMD_UNIT_REGEX.test(args[1])
+      isAllowedServiceUnit(args[1])
     ) {
-      return safeExec(command, args, options);
+      return safeExecWithOptionalSudo(command, args, options);
     }
 
     return {
@@ -70,17 +73,17 @@ export async function runAllowlistedCommand(
     if (
       args.length >= 6 &&
       args[0] === '-u' &&
-      SAFE_SYSTEMD_UNIT_REGEX.test(args[1]) &&
+      isAllowedServiceUnit(args[1]) &&
       args[2] === '--no-pager' &&
       args[3] === '-o' &&
       ALLOWED_JOURNAL_OUTPUTS.has(args[4]) &&
       args[5] === '-n' &&
       /^\d+$/.test(args[6] ?? '')
     ) {
-      const hasSince = args.length === 9 && args[7] === '--since' && !Number.isNaN(Date.parse(args[8] ?? ''));
+      const hasSince = args.length === 9 && args[7] === '--since' && isAllowedSinceValue(args[8]);
       const exact = args.length === 7;
       if (exact || hasSince) {
-        return safeExec(command, args, options);
+        return safeExecWithOptionalSudo(command, args, options);
       }
     }
 
@@ -96,4 +99,29 @@ export async function runAllowlistedCommand(
     stderr: `Command is not in the helper allowlist: ${command}`.slice(0, 300),
     exitCode: 1,
   };
+}
+
+function isAllowedServiceUnit(unit: string | undefined): boolean {
+  return unit === ALLOWED_SERVICE_NAME && SAFE_SYSTEMD_UNIT_REGEX.test(unit);
+}
+
+function isAllowedSinceValue(value: string | undefined): boolean {
+  return typeof value === 'string' && ISO_UTC_TIMESTAMP_REGEX.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function needsSudo(): boolean {
+  return typeof process.getuid === 'function' && process.getuid() !== 0;
+}
+
+function safeExecWithOptionalSudo(
+  command: string,
+  args: string[],
+  options: { timeout?: number; cwd?: string; env?: NodeJS.ProcessEnv } = {}
+): Promise<CommandResult> {
+  if (!needsSudo()) {
+    return safeExec(command, args, options);
+  }
+
+  const sudoCommand = command === '/usr/bin/journalctl' ? JOURNALCTL_WRAPPER : command;
+  return safeExec('/usr/bin/sudo', ['-n', sudoCommand, ...args], options);
 }

@@ -30,12 +30,17 @@ export default function CrashesPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadEvents = async () => {
     setLoading(true);
     const res = await apiGet<{ events: CrashEvent[]; total: number }>('/api/crashes?limit=100&status=all');
     if (res.success && res.data) {
       setEvents(res.data.events);
+      setLoadError(null);
+    } else {
+      setEvents([]);
+      setLoadError(res.error ?? 'Failed to load crash events');
     }
     setLoading(false);
   };
@@ -131,8 +136,15 @@ export default function CrashesPage() {
                 {actionMessage}
               </div>
             )}
+            {loadError && (
+              <div className="mb-4 rounded-md border border-red-800 bg-red-900/20 px-3 py-2 text-sm text-red-400">
+                {loadError}
+              </div>
+            )}
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading...</p>
+            ) : loadError ? (
+              <p className="text-sm text-muted-foreground">Crash history is unavailable right now.</p>
             ) : events.length === 0 ? (
               <p className="text-sm text-muted-foreground">No crash events detected. The server is running smoothly.</p>
             ) : (

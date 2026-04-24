@@ -133,7 +133,9 @@ export default function BansPage() {
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading...</p>
             ) : entries.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No banned players</p>
+              <p className="text-sm text-muted-foreground">
+                {error ? 'Ban list is unavailable right now.' : 'No banned players'}
+              </p>
             ) : (
               <div className="space-y-2">
                 {entries.map((entry) => (

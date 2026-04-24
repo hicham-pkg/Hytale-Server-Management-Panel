@@ -267,7 +267,9 @@ export default function WhitelistPage() {
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading...</p>
             ) : uuidList.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No players whitelisted</p>
+              <p className="text-sm text-muted-foreground">
+                {error ? 'Whitelist is unavailable right now.' : 'No players whitelisted'}
+              </p>
             ) : (
               <div className="space-y-2">
                 {uuidList.map((uuid) => (
