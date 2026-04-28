@@ -26,6 +26,10 @@ EXPECTED_HOST_HELPER_SOCKET_PATH="${HELPER_RUNTIME_DIR}/hytale-helper.sock"
 LEGACY_HOST_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 API_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 HYTALE_TMP_DIR="/opt/hytale/tmp"
+MOD_UPLOAD_STAGING_DIR="/opt/hytale-panel-data/mod-upload-staging"
+MODS_DIR="/opt/hytale/mods"
+DISABLED_MODS_DIR="/opt/hytale/mods-disabled"
+MOD_BACKUP_DIR="/opt/hytale/mod-backups"
 HELPER_OVERRIDE_DIR="/etc/systemd/system/hytale-helper.service.d"
 HELPER_OVERRIDE_FILE="${HELPER_OVERRIDE_DIR}/override.conf"
 HELPER_SUDOERS_FILE="/etc/sudoers.d/hytale-helper"
@@ -201,6 +205,8 @@ BACKUP_PATH="$(resolve_config_value BACKUP_PATH /opt/hytale-backups "$HELPER_ENV
 # ─── State flags (used by perform_fixes) ───────────────────
 HELPER_SERVICE_ACTIVE=0
 HELPER_UNIT_CONFIG_OK=0
+HELPER_RUNTIME_NNP_OK=0
+HELPER_RUNTIME_UID_OK=0
 HELPER_ENV_SOCKET_OK=0
 HELPER_OVERRIDE_CLEAN=0
 HELPER_SUDOERS_OK=0
@@ -222,6 +228,11 @@ HELPER_ENV_PERMS_OK=0
 HELPER_DEPLOY_PERMS_OK=0
 HELPER_RUNTIME_PERMS_OK=0
 HYTALE_TMP_READY=0
+MOD_STAGING_READY=0
+MODS_DIR_READY=0
+DISABLED_MODS_DIR_READY=0
+MOD_BACKUP_DIR_READY=0
+API_SEES_MOD_STAGING=0
 TMUX_SOCKET_EXISTS=0
 TMUX_SESSION_EXISTS=0
 JAVA_PROCESS_EXISTS=0
@@ -264,8 +275,31 @@ stat_owner() {
   stat -c '%U:%G' "$path" 2>/dev/null || sudo -n stat -c '%U:%G' "$path" 2>/dev/null || true
 }
 
+stat_uid_group() {
+  local path="$1"
+  stat -c '%u:%G' "$path" 2>/dev/null || sudo -n stat -c '%u:%G' "$path" 2>/dev/null || true
+}
+
 helper_unit_value() {
   systemctl show -p "$1" --value hytale-helper.service 2>/dev/null | tr -d '\r'
+}
+
+# Read a field out of the running helper process's /proc/$PID/status.
+# This deliberately bypasses `systemctl show` because several systemd
+# directives (SystemCallFilter, ProtectClock, RestrictAddressFamilies,
+# LockPersonality, etc.) IMPLY NoNewPrivileges=yes at exec time without
+# updating the unit-config view — so `systemctl show -p NoNewPrivileges`
+# returns "no" while /proc/$PID/status reports NoNewPrivs: 1, breaking
+# every helper sudoer call (Mods Manager Restart, etc.).
+helper_proc_status_field() {
+  local field="$1" pid status_path
+  pid="$(helper_unit_value MainPID)"
+  if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+    return 1
+  fi
+  status_path="/proc/${pid}/status"
+  [ -r "$status_path" ] || return 1
+  awk -v f="^${field}:" 'BEGIN{IGNORECASE=0} $0 ~ f { sub("^[^:]+:[[:space:]]+",""); print; exit }' "$status_path"
 }
 
 port_listen_address() {
@@ -439,6 +473,40 @@ check_services() {
     ok "Helper unit matches shipped model ($HELPER_USER / hytale-panel / supp=hytale / sudo-capable)"
   else
     fail "Helper unit drift: user=$u group=$g supp=$sg NNP=$np" "sudo cp systemd/hytale-helper.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart hytale-helper.service"
+  fi
+
+  # Runtime privilege check — reads /proc/$PID/status because `systemctl show`
+  # reports the unit-config view, which can disagree with the actual exec'd
+  # process when sandbox directives (SystemCallFilter, ProtectClock,
+  # RestrictAddressFamilies, LockPersonality, etc.) implicitly set NNP. If
+  # NNP is set on the running helper, every sudoer call (Mods Manager
+  # Restart, server stop/start, journalctl wrapper) fails with
+  # "no new privileges flag is set, which prevents sudo from running as root".
+  if [ "${HELPER_SERVICE_ACTIVE:-0}" -eq 1 ]; then
+    local nnp_runtime uid_runtime expected_uid
+    nnp_runtime="$(helper_proc_status_field NoNewPrivs || true)"
+    uid_runtime="$(helper_proc_status_field Uid | awk '{print $1}' || true)"
+    expected_uid="$(id -u "$HELPER_USER" 2>/dev/null || true)"
+
+    if [ -z "$nnp_runtime" ]; then
+      fail "Could not read NoNewPrivs from running helper /proc status" "sudo systemctl restart hytale-helper.service && rerun this check"
+    elif [ "$nnp_runtime" = "0" ]; then
+      HELPER_RUNTIME_NNP_OK=1
+      ok "Helper runtime NoNewPrivs=0 (sudo escalation works)"
+    else
+      fail "Helper runtime has NoNewPrivs=$nnp_runtime — sudo will fail; some directive in the unit (SystemCallFilter / ProtectClock / RestrictAddressFamilies / LockPersonality / ProtectKernelTunables / etc.) is implying NNP" "sudo cp systemd/hytale-helper.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart hytale-helper.service"
+    fi
+
+    if [ -z "$uid_runtime" ]; then
+      fail "Could not read Uid from running helper /proc status" "sudo systemctl restart hytale-helper.service && rerun this check"
+    elif [ "$uid_runtime" = "0" ]; then
+      fail "Helper is running as root (Uid=0); shipped model is non-root $HELPER_USER" "sudo cp systemd/hytale-helper.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart hytale-helper.service"
+    elif [ -n "$expected_uid" ] && [ "$uid_runtime" != "$expected_uid" ]; then
+      fail "Helper running uid=$uid_runtime but $HELPER_USER resolves to uid=$expected_uid" "verify /etc/passwd for $HELPER_USER, then sudo systemctl restart hytale-helper.service"
+    else
+      HELPER_RUNTIME_UID_OK=1
+      ok "Helper running as $HELPER_USER (uid=$uid_runtime)"
+    fi
   fi
 
   if [ -f "$HELPER_OVERRIDE_FILE" ]; then
@@ -618,6 +686,13 @@ check_helper_api_link() {
       ok "API container sees helper socket at $API_HELPER_SOCKET_PATH"
     else
       fail "API container cannot see helper socket at $API_HELPER_SOCKET_PATH" "docker compose up -d --force-recreate api"
+    fi
+
+    if docker_compose exec -T api sh -c "test -d '$MOD_UPLOAD_STAGING_DIR' && test -w '$MOD_UPLOAD_STAGING_DIR'" >/dev/null 2>&1; then
+      API_SEES_MOD_STAGING=1
+      ok "API container can write mod upload staging at $MOD_UPLOAD_STAGING_DIR"
+    else
+      fail "API container cannot write mod upload staging at $MOD_UPLOAD_STAGING_DIR" "sudo install -d -o 1000 -g $PANEL_SOCKET_GROUP -m 2770 $MOD_UPLOAD_STAGING_DIR && docker compose up -d --force-recreate api"
     fi
   elif [ "$API_CONTAINER_OK" -eq 0 ]; then
     warn "API container not running; skipping socket visibility check" "see earlier API container failure"
@@ -806,6 +881,32 @@ check_config() {
   else
     fail "$HELPER_DEPLOY_DIR has mode=$deploy_mode owner=$deploy_owner, expected 750 root:$PANEL_SOCKET_GROUP" "sudo chown -R root:$PANEL_SOCKET_GROUP $HELPER_DEPLOY_DIR && sudo chmod 750 $HELPER_DEPLOY_DIR"
   fi
+
+  local staging_mode staging_owner_id
+  staging_mode="$(stat_mode "$MOD_UPLOAD_STAGING_DIR")"
+  staging_owner_id="$(stat_uid_group "$MOD_UPLOAD_STAGING_DIR")"
+  if [ "$staging_mode" = "2770" ] && [ "$staging_owner_id" = "1000:$PANEL_SOCKET_GROUP" ]; then
+    MOD_STAGING_READY=1
+    ok "$MOD_UPLOAD_STAGING_DIR is 2770 uid 1000:$PANEL_SOCKET_GROUP"
+  else
+    fail "$MOD_UPLOAD_STAGING_DIR has mode=$staging_mode owner=$staging_owner_id, expected 2770 uid 1000:$PANEL_SOCKET_GROUP" "sudo install -d -o 1000 -g $PANEL_SOCKET_GROUP -m 2770 $MOD_UPLOAD_STAGING_DIR"
+  fi
+
+  local dir mode owner
+  for dir in "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"; do
+    mode="$(stat_mode "$dir")"
+    owner="$(stat_owner "$dir")"
+    if [ "$mode" = "2770" ] && [ "$owner" = "hytale:hytale" ]; then
+      case "$dir" in
+        "$MODS_DIR") MODS_DIR_READY=1 ;;
+        "$DISABLED_MODS_DIR") DISABLED_MODS_DIR_READY=1 ;;
+        "$MOD_BACKUP_DIR") MOD_BACKUP_DIR_READY=1 ;;
+      esac
+      ok "$dir is 2770 hytale:hytale"
+    else
+      fail "$dir has mode=$mode owner=$owner, expected 2770 hytale:hytale" "sudo install -d -o hytale -g hytale -m 2770 $dir"
+    fi
+  done
 }
 
 check_resources() {
@@ -933,6 +1034,8 @@ run_checks() {
 
   HELPER_SERVICE_ACTIVE=0
   HELPER_UNIT_CONFIG_OK=0
+  HELPER_RUNTIME_NNP_OK=0
+  HELPER_RUNTIME_UID_OK=0
   HELPER_ENV_SOCKET_OK=0
   HELPER_OVERRIDE_CLEAN=0
   HELPER_SUDOERS_OK=0
@@ -954,6 +1057,11 @@ run_checks() {
   HELPER_DEPLOY_PERMS_OK=0
   HELPER_RUNTIME_PERMS_OK=0
   HYTALE_TMP_READY=0
+  MOD_STAGING_READY=0
+  MODS_DIR_READY=0
+  DISABLED_MODS_DIR_READY=0
+  MOD_BACKUP_DIR_READY=0
+  API_SEES_MOD_STAGING=0
   TMUX_SOCKET_EXISTS=0
   TMUX_SESSION_EXISTS=0
   JAVA_PROCESS_EXISTS=0
@@ -1063,6 +1171,20 @@ perform_fixes() {
     fi
   fi
 
+  if [ "$MOD_STAGING_READY" -eq 0 ]; then
+    if sudo install -d -o 1000 -g "$PANEL_SOCKET_GROUP" -m 2770 "$MOD_UPLOAD_STAGING_DIR"; then
+      printf '  %s✓%s repaired mod upload staging dir (%s)\n' "$COLOR_GREEN" "$COLOR_RESET" "$MOD_UPLOAD_STAGING_DIR"
+      repairs=$((repairs + 1))
+    fi
+  fi
+
+  if [ "$MODS_DIR_READY" -eq 0 ] || [ "$DISABLED_MODS_DIR_READY" -eq 0 ] || [ "$MOD_BACKUP_DIR_READY" -eq 0 ]; then
+    if sudo install -d -o hytale -g hytale -m 2770 "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"; then
+      printf '  %s✓%s repaired mod directories\n' "$COLOR_GREEN" "$COLOR_RESET"
+      repairs=$((repairs + 1))
+    fi
+  fi
+
   if [ "$LEGACY_HOST_HELPER_SOCKET_EXISTS" -eq 1 ] && [ -S "$EXPECTED_HOST_HELPER_SOCKET_PATH" ]; then
     if sudo rm -f "$LEGACY_HOST_HELPER_SOCKET_PATH"; then
       printf '  %s✓%s removed stale legacy helper socket\n' "$COLOR_GREEN" "$COLOR_RESET"
@@ -1081,6 +1203,7 @@ perform_fixes() {
     local recreate_api=0
     [ "$API_CONTAINER_OK" -eq 0 ] && recreate_api=1
     [ "$API_SEES_HELPER_SOCKET" -eq 0 ] && recreate_api=1
+    [ "$API_SEES_MOD_STAGING" -eq 0 ] && recreate_api=1
 
     if [ "$POSTGRES_CONTAINER_OK" -eq 0 ]; then
       if docker_compose up -d postgres >/dev/null 2>&1; then

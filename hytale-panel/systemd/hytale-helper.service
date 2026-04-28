@@ -40,33 +40,60 @@ RestartSec=5
 # Environment file with HMAC secret and paths
 EnvironmentFile=/opt/hytale-panel/helper/.env
 
-# Security hardening
-# The helper itself is non-root. Sudo is required only for exact systemctl
-# commands and the validating journalctl wrapper in /etc/sudoers.d/hytale-helper.
-# Do not set NoNewPrivileges/RestrictSUIDSGID: sudo needs the setuid transition.
+# ─── Security hardening ───────────────────────────────────
+#
+# !!! READ BEFORE EDITING !!!
+# The helper runs as a NON-ROOT user but MUST be able to invoke `sudo` for the
+# narrow commands listed in /etc/sudoers.d/hytale-helper (systemctl on
+# hytale-tmux.service and the validating journalctl wrapper). sudo is a
+# setuid binary and CANNOT WORK when the kernel `no_new_privs` (NNP) bit is
+# set on the process.
+#
+# Several systemd hardening directives IMPLICITLY set NoNewPrivileges=yes
+# regardless of whether you also write `NoNewPrivileges=no`. Per
+# `systemd.exec(5)` "If this option is used, NoNewPrivileges=yes is implied":
+#   SystemCallFilter=, SystemCallArchitectures=, RestrictNamespaces=,
+#   RestrictAddressFamilies= (when unprivileged), PrivateDevices=,
+#   ProtectKernelTunables=, ProtectKernelModules=, ProtectKernelLogs=,
+#   ProtectClock=, ProtectHostname=, MemoryDenyWriteExecute=,
+#   RestrictRealtime=, RestrictSUIDSGID=, LockPersonality=, DynamicUser=
+#
+# Any of those will set NoNewPrivs:1 in /proc/$PID/status and break the
+# Mods Manager Restart button (and every other helper sudoer call) with:
+#   sudo: The "no new privileges" flag is set, which prevents sudo from
+#         running as root.
+#
+# DO NOT add directives from that list back to this unit. The trade-off is
+# accepted: the helper relies on filesystem confinement (ProtectSystem,
+# ProtectHome, ReadWritePaths), namespace isolation (PrivateTmp), resource
+# caps (MemoryMax, LimitNOFILE), and a non-root identity bounded by tight
+# sudoers rules — instead of seccomp/BPF-class filters that require NNP.
+#
+# Verify after every edit:
+#   sudo cp systemd/hytale-helper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl restart hytale-helper.service
+#   PID=$(systemctl show -p MainPID --value hytale-helper.service)
+#   grep -E '^(NoNewPrivs|Uid)' /proc/$PID/status
+# Expected: NoNewPrivs: 0   AND   Uid: <hytale-helper uid> ...
+# scripts/doctor.sh enforces both at runtime.
+
+# Explicit and load-bearing — do not flip without re-reading the comment above.
+NoNewPrivileges=no
+
+# AmbientCapabilities empty: helper inherits no capabilities. sudo brings its
+# own setuid escalation path. This directive does NOT imply NNP.
 AmbientCapabilities=
-SystemCallFilter=@system-service
-SystemCallErrorNumber=EPERM
-RestrictRealtime=true
-PrivateDevices=true
-ProtectClock=true
-ProtectHostname=true
+
 # Group-readable/writable files are intentional: backup and restore artifacts
 # must remain accessible to the hytale game-server user through group perms.
 UMask=0007
+
+# Filesystem confinement — none of these imply NNP.
 ProtectSystem=strict
 ProtectHome=true
 ProtectControlGroups=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-LockPersonality=true
-# The helper only needs local Unix sockets: its own Fastify socket and the
-# host-side AF_UNIX transports used by sudo/systemd/tmux tooling.
-RestrictAddressFamilies=AF_UNIX
-# MemoryDenyWriteExecute is intentionally omitted because Node.js relies on JIT
-# memory mappings and this service would fail to start with that restriction.
-ReadWritePaths=/opt/hytale /opt/hytale-backups /opt/hytale-panel/run
 PrivateTmp=true
+ReadWritePaths=/opt/hytale /opt/hytale-backups /opt/hytale-panel/run /opt/hytale-panel-data/mod-upload-staging
 
 # Resource limits
 LimitNOFILE=1024
