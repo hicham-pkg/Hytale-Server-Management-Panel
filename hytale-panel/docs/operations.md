@@ -501,6 +501,106 @@ The panel provides two modes of operation:
 
 ---
 
+## Panel Update Checker
+
+An admin-only **Panel Updates** card on the dashboard polls the GitHub
+Releases API and reports whether a newer panel version has been published.
+**Read-only** — it does not download, apply, or install anything. Manual
+upgrade still goes through `deploy/update-panel.sh`.
+
+### Configuration
+
+`.env` (root, consumed by the API container):
+
+```bash
+# Repo to poll. owner/repo format, regex-validated. Default:
+PANEL_UPDATE_REPO=hicham-pkg/Hytale-Server-Management-Panel
+
+# Cache TTL for the GitHub fetch. 1–1440 minutes. Default 60.
+PANEL_UPDATE_CACHE_MINUTES=60
+
+# Optional. Required only if PANEL_UPDATE_REPO is private. Use a fine-grained
+# PAT scoped to "Contents: Read-only" on the panel repo. NEVER returned to
+# the browser; sent only on the outbound GitHub request.
+# GITHUB_UPDATE_TOKEN=github_pat_xxx_yyy
+
+# Optional version override. See below.
+# PANEL_VERSION=
+# PANEL_BUILD_COMMIT=
+```
+
+After editing `.env`:
+```bash
+docker compose up -d --force-recreate api
+```
+
+### Version sources, in priority order
+
+1. **`PANEL_VERSION`** env var, if set.
+2. **`packages/api/package.json`** `version` field — read at runtime.
+
+The repo's root `package.json` is `private: true` with no version field; it
+exists to orchestrate the pnpm workspace. The five workspace packages
+(`api`, `helper`, `web`, `shared`, `scripts`) share a single version and are
+bumped together at every release. The api workspace's `package.json` is the
+runtime source because:
+
+- The API container is built via `pnpm deploy`, which produces a self-contained
+  bundle where `packages/api/package.json` ends up at `/app/package.json`.
+- A version mismatch between workspaces would mean the release-bump step
+  was incomplete; the doctor script can be extended to surface that, but the
+  release flow already bumps all five together.
+
+Set `PANEL_VERSION` explicitly if you ship a binary release that strips
+the package.json, or if you want the panel to advertise a build label that
+differs from the recorded api version (e.g. `1.1.0+rebuild.3`).
+
+### Setting `PANEL_BUILD_COMMIT` at deploy time
+
+Optional. When set, the dashboard shows a short SHA next to the current
+version. Recommended pattern in `deploy/update-panel.sh` or your CI:
+
+```bash
+PANEL_BUILD_COMMIT=$(git -C /opt/hytale-panel rev-parse --short HEAD)
+# write or update PANEL_BUILD_COMMIT in /opt/hytale-panel/.env, then:
+docker compose up -d --force-recreate api
+```
+
+Leave unset and the line is hidden — no fallback to "unknown".
+
+### Release tagging
+
+The release flow:
+1. Bump `version` in all five workspace `package.json` files to the new
+   semver (e.g. `1.2.0`).
+2. Commit as `chore(release): vX.Y.Z`.
+3. Annotated tag: `git tag -a vX.Y.Z -m "release notes"`.
+4. `git push origin main && git push origin vX.Y.Z`.
+
+The update checker reads `tag_name` from the `/releases/latest` GitHub
+endpoint, strips a leading `v`, and compares semver-style. Drafts and
+prereleases are surfaced via the `prerelease` flag but still flagged as
+"update available" if they sort higher than the current version.
+
+### Security notes
+
+- `GITHUB_UPDATE_TOKEN` is read from the API container's env. It is sent
+  only as `Authorization: Bearer <token>` to `https://api.github.com`. It
+  is never:
+  - returned in any HTTP response payload,
+  - written to the audit log,
+  - logged in stdout/stderr,
+  - persisted to the database.
+- The release URL the dashboard renders is server-side validated to point
+  to `https://github.com/{configured-owner}/{configured-repo}/...` —
+  malformed responses are dropped, not echoed.
+- Every check writes a `system.update_check` row to the audit log
+  (admin user id + `force` + cache hit + version pair, no token).
+- Readonly users cannot see the card and are rejected (403) at the route
+  layer.
+
+---
+
 ## Troubleshooting
 
 ### API Won't Start

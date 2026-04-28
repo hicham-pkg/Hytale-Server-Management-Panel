@@ -89,6 +89,11 @@ services:
       CRASH_LOG_RETENTION_DAYS: ${CRASH_LOG_RETENTION_DAYS:-30}
       MOD_UPLOAD_STAGING_PATH: /opt/hytale-panel-data/mod-upload-staging
       MAX_MOD_UPLOAD_SIZE_MB: ${MAX_MOD_UPLOAD_SIZE_MB:-150}
+      PANEL_VERSION: ${PANEL_VERSION:-}
+      PANEL_BUILD_COMMIT: ${PANEL_BUILD_COMMIT:-}
+      PANEL_UPDATE_REPO: ${PANEL_UPDATE_REPO:-hicham-pkg/Hytale-Server-Management-Panel}
+      PANEL_UPDATE_CACHE_MINUTES: ${PANEL_UPDATE_CACHE_MINUTES:-60}
+      GITHUB_UPDATE_TOKEN: ${GITHUB_UPDATE_TOKEN:-}
     volumes:
       # Mount a stable host directory so helper restarts do not replace the
       # bind-mounted inode the API container depends on.

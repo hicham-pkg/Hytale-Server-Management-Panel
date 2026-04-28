@@ -137,3 +137,22 @@ export interface PaginationQuery {
   page?: number;
   limit?: number;
 }
+
+/**
+ * Shape returned by GET /api/system/updates/status. The GitHub token (if any)
+ * is intentionally absent — it is never sent to the browser.
+ */
+export interface PanelUpdateStatus {
+  currentVersion: string;
+  currentCommit?: string;
+  latestVersion: string | null;
+  latestTag: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  releaseName: string | null;
+  publishedAt: string | null;
+  prerelease: boolean;
+  checkedAt: string;
+  fromCache: boolean;
+  error?: string;
+}

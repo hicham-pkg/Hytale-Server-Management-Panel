@@ -20,6 +20,7 @@ import { statsRoutes } from './routes/stats.routes';
 import { auditRoutes } from './routes/audit.routes';
 import { settingsRoutes } from './routes/settings.routes';
 import { userRoutes } from './routes/user.routes';
+import { systemUpdateRoutes } from './routes/system-update.routes';
 import { consoleWsHandler } from './ws/console.ws';
 
 export async function buildApp() {
@@ -98,6 +99,7 @@ export async function buildApp() {
   await fastify.register(auditRoutes);
   await fastify.register(settingsRoutes);
   await fastify.register(userRoutes);
+  await fastify.register(systemUpdateRoutes);
 
   // WebSocket
   await fastify.register(consoleWsHandler);

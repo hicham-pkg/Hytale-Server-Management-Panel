@@ -9,7 +9,24 @@ import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { useAuth } from '@/hooks/use-auth';
 import { apiGet, apiPost } from '@/lib/api-client';
-import { Play, Square, RotateCcw, Cpu, HardDrive, MemoryStick, AlertTriangle } from 'lucide-react';
+import { Play, Square, RotateCcw, Cpu, HardDrive, MemoryStick, AlertTriangle, Package } from 'lucide-react';
+
+// Mirrors PanelUpdateStatus in packages/shared/src/types/api.ts. Kept inline
+// here because the web package doesn't depend on @hytale-panel/shared.
+interface PanelUpdateStatus {
+  currentVersion: string;
+  currentCommit?: string;
+  latestVersion: string | null;
+  latestTag: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  releaseName: string | null;
+  publishedAt: string | null;
+  prerelease: boolean;
+  checkedAt: string;
+  fromCache: boolean;
+  error?: string;
+}
 
 interface SystemStats {
   cpuUsagePercent: number;
@@ -37,6 +54,26 @@ export default function DashboardPage() {
   const [recentCrashesError, setRecentCrashesError] = useState('');
   const [actionLoading, setActionLoading] = useState('');
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<PanelUpdateStatus | null>(null);
+  const [updateError, setUpdateError] = useState('');
+  const [updateChecking, setUpdateChecking] = useState(false);
+
+  const loadUpdateStatus = async (force: boolean) => {
+    setUpdateChecking(true);
+    setUpdateError('');
+    const path = force
+      ? '/api/system/updates/status?force=true'
+      : '/api/system/updates/status';
+    const res = await apiGet<PanelUpdateStatus>(path);
+    if (res.success && res.data) {
+      setUpdateStatus(res.data);
+      if (res.data.error) setUpdateError(res.data.error);
+    } else {
+      setUpdateStatus(null);
+      setUpdateError(res.error ?? 'Update check unavailable');
+    }
+    setUpdateChecking(false);
+  };
 
   useEffect(() => {
     apiGet<SystemStats>('/api/stats/system').then((res) => {
@@ -57,7 +94,11 @@ export default function DashboardPage() {
         setRecentCrashesError(res.error ?? 'Recent warnings unavailable');
       }
     });
-  }, []);
+    if (user?.role === 'admin') {
+      void loadUpdateStatus(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
 
   const handleServerAction = async (action: 'start' | 'stop' | 'restart') => {
     setActionLoading(action);
@@ -272,6 +313,91 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Panel Updates — admin-only */}
+        {isAdmin && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="flex items-center gap-2 text-base font-medium">
+                <Package className="h-4 w-4" /> Panel Updates
+              </CardTitle>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={updateChecking}
+                onClick={() => void loadUpdateStatus(true)}
+              >
+                {updateChecking ? 'Checking…' : 'Check now'}
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {!updateStatus && !updateError && (
+                <p className="text-sm text-muted-foreground">Checking for updates…</p>
+              )}
+              {updateError && !updateStatus?.latestVersion && (
+                <p className="text-sm text-yellow-400">{updateError}</p>
+              )}
+              {updateStatus && (
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Current version</span>
+                    <span className="font-mono">
+                      {updateStatus.currentVersion}
+                      {updateStatus.currentCommit ? ` (${updateStatus.currentCommit.slice(0, 7)})` : ''}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Latest release</span>
+                    <span className="font-mono">{updateStatus.latestVersion ?? 'unknown'}</span>
+                  </div>
+                  {updateStatus.publishedAt && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Published</span>
+                      <span>{new Date(updateStatus.publishedAt).toLocaleDateString()}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Status</span>
+                    <span>
+                      {updateStatus.updateAvailable ? (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                          Update available
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">Up to date</span>
+                      )}
+                    </span>
+                  </div>
+                  {updateStatus.updateAvailable && (
+                    <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                      This panel cannot auto-install updates yet. Apply the new
+                      release manually following the upgrade docs.
+                    </p>
+                  )}
+                  {updateStatus.releaseUrl && (
+                    <div className="pt-2">
+                      <a
+                        href={updateStatus.releaseUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-primary underline"
+                      >
+                        View release notes ↗
+                      </a>
+                    </div>
+                  )}
+                  {updateError && updateStatus.latestVersion && (
+                    <p className="text-xs text-yellow-400">{updateError}</p>
+                  )}
+                  <p className="pt-1 text-xs text-muted-foreground">
+                    Checked {new Date(updateStatus.checkedAt).toLocaleString()}
+                    {updateStatus.fromCache ? ' (cached)' : ''}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </AppShell>
   );

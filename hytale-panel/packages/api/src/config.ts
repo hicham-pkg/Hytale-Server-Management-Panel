@@ -30,6 +30,15 @@ const ConfigSchema = z.object({
   crashLogRetentionDays: z.coerce.number().default(30),
   modUploadStagingPath: z.string().startsWith('/').default('/opt/hytale-panel-data/mod-upload-staging'),
   maxModUploadSizeMb: z.coerce.number().int().min(1).max(1024).default(150),
+  // Panel update checker — read-only poll of GitHub Releases. The token (if
+  // set) is used only for authenticated requests to api.github.com when the
+  // repo is private; it is never returned to the browser or persisted.
+  panelUpdateRepo: z
+    .string()
+    .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'PANEL_UPDATE_REPO must be "owner/repo"')
+    .default('hicham-pkg/Hytale-Server-Management-Panel'),
+  panelUpdateCacheMinutes: z.coerce.number().int().min(1).max(1440).default(60),
+  githubUpdateToken: z.string().min(1).optional(),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
@@ -64,6 +73,9 @@ export function getConfig(): AppConfig {
       crashLogRetentionDays: process.env.CRASH_LOG_RETENTION_DAYS,
       modUploadStagingPath: process.env.MOD_UPLOAD_STAGING_PATH,
       maxModUploadSizeMb: process.env.MAX_MOD_UPLOAD_SIZE_MB,
+      panelUpdateRepo: process.env.PANEL_UPDATE_REPO,
+      panelUpdateCacheMinutes: process.env.PANEL_UPDATE_CACHE_MINUTES,
+      githubUpdateToken: process.env.GITHUB_UPDATE_TOKEN || undefined,
     });
   }
   return _config;
