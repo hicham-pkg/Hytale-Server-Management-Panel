@@ -20,6 +20,9 @@ export const BAN_REASON_REGEX = /^[a-zA-Z0-9 _\-\.@:\/]{0,200}$/;
 /** Regex for valid backup filenames */
 export const BACKUP_FILENAME_REGEX = /^[a-zA-Z0-9_\-\.]+\.tar\.gz$/;
 
+/** Regex for sanitized mod filenames */
+export const MOD_FILENAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.(jar|zip)$/i;
+
 /** UUID v4 regex */
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -67,6 +70,14 @@ export const HELPER_OPERATIONS = [
   'backup.delete',
   'backup.hash',
   'backup.operationStatus',
+  'mods.list',
+  'mods.installStaged',
+  'mods.disable',
+  'mods.enable',
+  'mods.remove',
+  'mods.backup',
+  'mods.rollback',
+  'mods.restartVerify',
   'stats.system',
   'stats.process',
 ] as const;

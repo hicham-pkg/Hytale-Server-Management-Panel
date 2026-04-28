@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import * as path from 'path';
+import { guardPath } from '../../packages/helper/src/utils/path-guard';
 
 // Simplified path guard for testing
 function guardPathSync(filePath: string, allowedBase: string): string {
@@ -36,5 +39,39 @@ describe('Path Guard', () => {
 
   it('should block paths that start with base but are different directories', () => {
     expect(() => guardPathSync('/opt/hytale-backups-evil/file', base)).toThrow('Path traversal blocked');
+  });
+});
+
+describe('Async Path Guard', () => {
+  let root = '';
+
+  afterEach(async () => {
+    if (root) {
+      await rm(root, { recursive: true, force: true });
+      root = '';
+    }
+  });
+
+  it('blocks writes through a symlinked parent directory', async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'hytale-path-guard-'));
+    const allowedBase = path.join(root, 'base');
+    const outside = path.join(root, 'outside');
+    await mkdir(allowedBase, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, path.join(allowedBase, 'link'));
+
+    await expect(guardPath(path.join(allowedBase, 'link', 'new.jar'), allowedBase))
+      .rejects.toThrow('Parent symlink traversal blocked');
+  });
+
+  it('blocks a managed base directory that has been replaced by a symlink', async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'hytale-path-guard-'));
+    const allowedBase = path.join(root, 'base');
+    const outside = path.join(root, 'outside');
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, allowedBase);
+
+    await expect(guardPath(path.join(allowedBase, 'new.jar'), allowedBase))
+      .rejects.toThrow('Base symlink traversal blocked');
   });
 });

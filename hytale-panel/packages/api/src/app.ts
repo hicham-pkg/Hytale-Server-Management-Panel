@@ -14,6 +14,7 @@ import { whitelistRoutes } from './routes/whitelist.routes';
 import { banRoutes } from './routes/ban.routes';
 import { backupRoutes } from './routes/backup.routes';
 import { backupJobRoutes } from './routes/backup-jobs.routes';
+import { modRoutes } from './routes/mod.routes';
 import { crashRoutes } from './routes/crash.routes';
 import { statsRoutes } from './routes/stats.routes';
 import { auditRoutes } from './routes/audit.routes';
@@ -68,7 +69,7 @@ export async function buildApp() {
     origin: config.corsOrigin || false,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+    allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'X-Mod-Filename'],
   });
 
   await fastify.register(fastifyRateLimit, {
@@ -91,6 +92,7 @@ export async function buildApp() {
   await fastify.register(banRoutes);
   await fastify.register(backupRoutes);
   await fastify.register(backupJobRoutes);
+  await fastify.register(modRoutes);
   await fastify.register(crashRoutes);
   await fastify.register(statsRoutes);
   await fastify.register(auditRoutes);

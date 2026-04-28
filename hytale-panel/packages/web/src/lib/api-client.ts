@@ -152,6 +152,17 @@ export async function apiPost<T = unknown>(path: string, body?: unknown) {
   });
 }
 
+export async function apiUploadMod<T = unknown>(path: string, file: File) {
+  return apiRequest<T>(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'X-Mod-Filename': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+}
+
 export async function apiPut<T = unknown>(path: string, body?: unknown) {
   return apiRequest<T>(path, {
     method: 'PUT',

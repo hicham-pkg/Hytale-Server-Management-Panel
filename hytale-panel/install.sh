@@ -44,6 +44,10 @@ DEFAULT_PANEL_SOCKET_GID=2001
 HELPER_USER="hytale-helper"
 HELPER_RUNTIME_DIR="/opt/hytale-panel/run"
 HELPER_ENV_FILE="/opt/hytale-panel/helper/.env"
+MOD_UPLOAD_STAGING_DIR="/opt/hytale-panel-data/mod-upload-staging"
+MODS_DIR="/opt/hytale/mods"
+DISABLED_MODS_DIR="/opt/hytale/mods-disabled"
+MOD_BACKUP_DIR="/opt/hytale/mod-backups"
 HELPER_WRAPPER_DIR="/usr/local/lib/hytale-panel"
 HELPER_JOURNALCTL_WRAPPER="${HELPER_WRAPPER_DIR}/hytale-helper-journalctl"
 STABLE_HELPER_SOCKET_PATH="${HELPER_RUNTIME_DIR}/hytale-helper.sock"
@@ -852,6 +856,10 @@ mkdir -p /opt/hytale-backups
 mkdir -p /opt/hytale-panel
 mkdir -p /opt/hytale-panel/helper
 mkdir -p "$HELPER_RUNTIME_DIR"
+mkdir -p "$MOD_UPLOAD_STAGING_DIR"
+mkdir -p "$MODS_DIR"
+mkdir -p "$DISABLED_MODS_DIR"
+mkdir -p "$MOD_BACKUP_DIR"
 
 if [ "$HYTALE_SERVER_PATH" = "/opt/hytale/Server" ]; then
   mkdir -p /opt/hytale/Server
@@ -873,10 +881,14 @@ chown hytale:hytale /opt/hytale/tmp
 chmod 2770 /opt/hytale/tmp
 chown hytale:hytale /opt/hytale-backups
 chmod 2770 /opt/hytale-backups                   # hytale + helper supplementary group access
+chown hytale:hytale "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"
+chmod 2770 "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"
 chown -R root:"$PANEL_SOCKET_GROUP" /opt/hytale-panel/helper
 chmod 750 /opt/hytale-panel/helper
 chown "$HELPER_USER:$PANEL_SOCKET_GROUP" "$HELPER_RUNTIME_DIR"
 chmod 770 "$HELPER_RUNTIME_DIR"
+chown 1000:"$PANEL_SOCKET_GROUP" "$MOD_UPLOAD_STAGING_DIR"
+chmod 2770 "$MOD_UPLOAD_STAGING_DIR"
 
 log_ok "Directories created with correct permissions"
 
@@ -921,6 +933,7 @@ if [ -z "$(read_env_value "$PANEL_DIR/.env" DB_PASSWORD || true)" ]; then
 fi
 
 set_env_var "$PANEL_DIR/.env" PANEL_SOCKET_GID "$PANEL_SOCKET_GID"
+ensure_env_var_if_missing "$PANEL_DIR/.env" MAX_MOD_UPLOAD_SIZE_MB 150
 
 # Lock down panel .env — contains SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD.
 # Install-time umask may leave it 0644 (world-readable); force 0600 so local users on the host
@@ -965,6 +978,11 @@ HELPER_HMAC_SECRET=$HMAC_SECRET
 # Hytale server paths
 HYTALE_ROOT=$HYTALE_ROOT_PATH
 BACKUP_PATH=/opt/hytale-backups
+MODS_PATH=$MODS_DIR
+DISABLED_MODS_PATH=$DISABLED_MODS_DIR
+MOD_UPLOAD_STAGING_PATH=$MOD_UPLOAD_STAGING_DIR
+MOD_BACKUP_PATH=$MOD_BACKUP_DIR
+MOD_BACKUP_RETENTION=10
 HYTALE_SERVICE_NAME=hytale-tmux.service
 TMUX_SESSION=hytale
 TMUX_SOCKET_PATH=/opt/hytale/run/hytale.tmux.sock
@@ -991,6 +1009,11 @@ set_env_var "$HELPER_ENV_FILE" HELPER_SOCKET_PATH "$STABLE_HELPER_SOCKET_PATH"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" HELPER_HMAC_SECRET "$HMAC_SECRET"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_ROOT "$HYTALE_ROOT_PATH"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" BACKUP_PATH /opt/hytale-backups
+ensure_env_var_if_missing "$HELPER_ENV_FILE" MODS_PATH "$MODS_DIR"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" DISABLED_MODS_PATH "$DISABLED_MODS_DIR"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_UPLOAD_STAGING_PATH "$MOD_UPLOAD_STAGING_DIR"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_BACKUP_PATH "$MOD_BACKUP_DIR"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_BACKUP_RETENTION 10
 ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SERVICE_NAME hytale-tmux.service
 ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SESSION hytale
 ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SOCKET_PATH /opt/hytale/run/hytale.tmux.sock
@@ -1125,6 +1148,7 @@ echo ""
 echo "What is ready now:"
 echo "  - hytale-helper.service installed with the shipped dedicated non-root helper model"
 echo "  - Legacy hytale.service retired automatically if it existed"
+echo "  - Mods Manager directories prepared (${MODS_DIR}, ${DISABLED_MODS_DIR}, ${MOD_UPLOAD_STAGING_DIR})"
 if [ "${SKIP_PANEL_BRINGUP:-0}" = "1" ]; then
   echo "  - Panel container bring-up was skipped on purpose"
 else

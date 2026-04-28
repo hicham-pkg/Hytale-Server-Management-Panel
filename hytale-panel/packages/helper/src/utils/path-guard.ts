@@ -13,9 +13,22 @@ export async function guardPath(filePath: string, allowedBase: string): Promise<
     throw new Error(`Path traversal blocked: ${filePath} is outside ${allowedBase}`);
   }
 
+  const baseStat = await fs.lstat(normalizedBase).catch((err: unknown) => {
+    const e = err as { code?: string };
+    if (e.code === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  });
+  if (baseStat?.isSymbolicLink()) {
+    throw new Error(`Base symlink traversal blocked: ${allowedBase}`);
+  }
+
+  const realBase = baseStat ? await fs.realpath(normalizedBase) : normalizedBase;
+
   try {
     const real = await fs.realpath(resolved);
-    if (!real.startsWith(normalizedBase + path.sep) && real !== normalizedBase) {
+    if (!real.startsWith(realBase + path.sep) && real !== realBase) {
       throw new Error(`Symlink traversal blocked: ${filePath} resolves outside ${allowedBase}`);
     }
     return real;
@@ -26,11 +39,15 @@ export async function guardPath(filePath: string, allowedBase: string): Promise<
       const parentDir = path.dirname(resolved);
       try {
         const realParent = await fs.realpath(parentDir);
-        if (!realParent.startsWith(normalizedBase + path.sep) && realParent !== normalizedBase) {
+        if (!realParent.startsWith(realBase + path.sep) && realParent !== realBase) {
           throw new Error(`Parent symlink traversal blocked: ${filePath}`);
         }
-      } catch {
-        // Parent doesn't exist either — only allow if resolved path is within base
+      } catch (parentErr: unknown) {
+        const parentNodeErr = parentErr as { code?: string };
+        if (parentNodeErr.code !== 'ENOENT') {
+          throw parentErr;
+        }
+        // Parent doesn't exist either — only allow if resolved path is within base.
       }
       return resolved;
     }

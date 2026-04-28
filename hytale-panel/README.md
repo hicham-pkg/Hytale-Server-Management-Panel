@@ -7,6 +7,7 @@ A self-hosted web panel for managing a Hytale server on Ubuntu. It provides serv
 - Server lifecycle control (`start`, `stop`, `restart`, status)
 - Live console over WebSocket with command support
 - Whitelist and ban management
+- Safe Mods Manager for `.jar` / `.zip` uploads, enable/disable, backup, rollback, and restart verification
 - Backup create/restore with job tracking
 - Crash/event history and audit logs
 - Multi-user auth with `admin` and `readonly` roles
@@ -74,6 +75,7 @@ pnpm run generate-secret
 - Main host services:
   - `hytale-helper.service`
   - `hytale-tmux.service`
+- Mods are managed through the host helper. Raw uploads are staged under `/opt/hytale-panel-data/mod-upload-staging`; active mods live in `/opt/hytale/mods`, disabled mods in `/opt/hytale/mods-disabled`, and mod backups in `/opt/hytale/mod-backups`.
 - Session defaults (override via `.env`): admin idle timeout 15 min, readonly idle timeout 60 min, absolute session lifetime 4 h.
 - Admin guardrails: the last remaining admin cannot be demoted or deleted through the users API.
 - Standard operator commands:

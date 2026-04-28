@@ -25,6 +25,16 @@ import {
   getBackupOperationStatus,
   reconcileRunningBackupOperations,
 } from './handlers/backup';
+import {
+  backupMods,
+  disableMod,
+  enableMod,
+  installStagedMod,
+  listMods,
+  removeMod,
+  restartAndVerifyServer,
+  rollbackModsBackup,
+} from './handlers/mods';
 import { getSystemStats, getProcessStats } from './handlers/stats';
 
 // Cap on the total /rpc request body. All legitimate helper payloads fit
@@ -243,6 +253,44 @@ async function executeOperation(
       const result = await hashBackup(config, filename);
       return { success: result.success, data: { sha256: result.sha256 }, error: result.error };
     }
+    case 'mods.list': {
+      return runModRpc(() => listMods(config));
+    }
+    case 'mods.installStaged': {
+      const stagedId = z.string().regex(UUID_REGEX).parse(params.stagedId);
+      const sanitizedName = z.string().max(140).parse(params.sanitizedName);
+      const sha256 = z.string().regex(/^[a-f0-9]{64}$/i).parse(params.sha256);
+      const replace = z.boolean().parse(params.replace ?? false);
+      return runModRpc(() => installStagedMod(config, stagedId, sanitizedName, sha256, replace));
+    }
+    case 'mods.disable': {
+      const name = z.string().max(140).parse(params.name);
+      return runModRpc(async () => ({ ...(await disableMod(config, name)), message: 'Mod disabled' }));
+    }
+    case 'mods.enable': {
+      const name = z.string().max(140).parse(params.name);
+      return runModRpc(async () => ({ ...(await enableMod(config, name)), message: 'Mod enabled' }));
+    }
+    case 'mods.remove': {
+      const name = z.string().max(140).parse(params.name);
+      return runModRpc(async () => ({ ...(await removeMod(config, name)), message: 'Mod removed' }));
+    }
+    case 'mods.backup': {
+      return runModRpc(async () => ({ ...(await backupMods(config, 'manual')), message: 'Mods backup created' }));
+    }
+    case 'mods.rollback': {
+      const backupName = params.backupName ? z.string().max(200).parse(params.backupName) : undefined;
+      return runModRpc(async () => ({ ...(await rollbackModsBackup(config, backupName)), message: 'Mods backup restored' }));
+    }
+    case 'mods.restartVerify': {
+      const autoRollback = z.boolean().parse(params.autoRollback ?? false);
+      try {
+        const result = await restartAndVerifyServer(config, autoRollback);
+        return { success: result.startupOk, data: result, error: result.startupOk ? undefined : result.message };
+      } catch (err) {
+        return { success: false, error: err instanceof Error && !err.message.includes('/') ? err.message : 'Mod operation failed' };
+      }
+    }
     case 'stats.system': {
       const result = await getSystemStats();
       return { success: result.success, data: result.stats, error: result.error };
@@ -253,5 +301,16 @@ async function executeOperation(
     }
     default:
       return { success: false, error: `Unknown operation: ${operation}` };
+  }
+}
+
+async function runModRpc<T>(fn: () => Promise<T>): Promise<{ success: boolean; data?: T; error?: string }> {
+  try {
+    return { success: true, data: await fn() };
+  } catch (err) {
+    const message = err instanceof Error && err.message && !err.message.includes('/')
+      ? err.message
+      : 'Mod operation failed';
+    return { success: false, error: message };
   }
 }

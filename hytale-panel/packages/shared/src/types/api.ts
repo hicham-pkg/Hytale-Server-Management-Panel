@@ -87,6 +87,52 @@ export interface StatsResponse {
   process: ProcessStats;
 }
 
+export type ModStatus = 'active' | 'disabled';
+
+export interface ModInfo {
+  name: string;
+  sizeBytes: number;
+  sha256: string;
+  modifiedAt: string;
+  status: ModStatus;
+}
+
+export interface ModListResponse {
+  active: ModInfo[];
+  disabled: ModInfo[];
+}
+
+export interface StagedModInfo {
+  stagedId: string;
+  originalName: string;
+  sanitizedName: string;
+  sizeBytes: number;
+  sha256: string;
+  extension: 'jar' | 'zip';
+  stagedAt: string;
+}
+
+export interface ModInstallResponse {
+  mod: ModInfo;
+  backupName: string;
+}
+
+export interface ModActionResponse {
+  message: string;
+  backupName?: string;
+  removedFrom?: ModStatus;
+}
+
+export interface ModRestartVerifyResponse {
+  restartSucceeded: boolean;
+  startupOk: boolean;
+  errors: string[];
+  rollbackPerformed: boolean;
+  rollbackBackupName?: string;
+  rollbackRestartSucceeded?: boolean;
+  message: string;
+}
+
 export interface PaginationQuery {
   page?: number;
   limit?: number;

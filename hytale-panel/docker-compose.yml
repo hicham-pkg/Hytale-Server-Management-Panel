@@ -87,10 +87,15 @@ services:
       GLOBAL_RATE_LIMIT_WINDOW_MS: ${GLOBAL_RATE_LIMIT_WINDOW_MS:-60000}
       AUDIT_LOG_RETENTION_DAYS: ${AUDIT_LOG_RETENTION_DAYS:-90}
       CRASH_LOG_RETENTION_DAYS: ${CRASH_LOG_RETENTION_DAYS:-30}
+      MOD_UPLOAD_STAGING_PATH: /opt/hytale-panel-data/mod-upload-staging
+      MAX_MOD_UPLOAD_SIZE_MB: ${MAX_MOD_UPLOAD_SIZE_MB:-150}
     volumes:
       # Mount a stable host directory so helper restarts do not replace the
       # bind-mounted inode the API container depends on.
       - /opt/hytale-panel/run:/run/hytale-helper:ro
+      # Narrow write mount for raw mod uploads only. The API never gets access
+      # to /opt/hytale or active mods; installs are helper-controlled.
+      - /opt/hytale-panel-data/mod-upload-staging:/opt/hytale-panel-data/mod-upload-staging:rw
     ports:
       # IMPORTANT: Bind to 127.0.0.1 only — never expose directly to internet.
       - "127.0.0.1:${API_HOST_PORT:-4000}:4000"

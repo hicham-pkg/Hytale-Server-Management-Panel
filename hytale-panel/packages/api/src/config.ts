@@ -28,6 +28,8 @@ const ConfigSchema = z.object({
   globalRateLimitWindowMs: z.coerce.number().default(60_000),
   auditLogRetentionDays: z.coerce.number().default(90),
   crashLogRetentionDays: z.coerce.number().default(30),
+  modUploadStagingPath: z.string().startsWith('/').default('/opt/hytale-panel-data/mod-upload-staging'),
+  maxModUploadSizeMb: z.coerce.number().int().min(1).max(1024).default(150),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
@@ -60,6 +62,8 @@ export function getConfig(): AppConfig {
       globalRateLimitWindowMs: process.env.GLOBAL_RATE_LIMIT_WINDOW_MS,
       auditLogRetentionDays: process.env.AUDIT_LOG_RETENTION_DAYS,
       crashLogRetentionDays: process.env.CRASH_LOG_RETENTION_DAYS,
+      modUploadStagingPath: process.env.MOD_UPLOAD_STAGING_PATH,
+      maxModUploadSizeMb: process.env.MAX_MOD_UPLOAD_SIZE_MB,
     });
   }
   return _config;

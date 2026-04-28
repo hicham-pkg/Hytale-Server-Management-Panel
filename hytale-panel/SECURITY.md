@@ -25,6 +25,7 @@ This panel is designed for a **single VPS, small admin team** (1–3 users) scen
 | **WebSocket auth bypass** | Session cookie validated on WS upgrade; explicit `WS_ALLOWED_ORIGINS`; message and connection rate limits |
 | **Privilege escalation** | HMAC-signed helper requests with timestamp; non-root helper; exact allowlisted `systemctl` sudoers plus a validating `journalctl` wrapper; non-root Docker |
 | **Backup restore abuse** | Server-stopped precondition; automatic safety snapshot before restore |
+| **Unsafe mod uploads** | API stages raw `.jar` / `.zip` uploads outside web/static paths; helper validates staged IDs and filenames before moving files into `/opt/hytale/mods`; files are never extracted or executed by the panel |
 | **XSS via logs** | ANSI stripping; React default escaping; no `dangerouslySetInnerHTML`; baseline CSP on web responses (currently allows `'unsafe-inline'` scripts for Next.js runtime compatibility) |
 | **Docker escape** | Non-root container; no `--privileged`; only Unix socket mounted |
 | **Replay attacks** | HMAC includes timestamp (±30s window) |
@@ -124,6 +125,10 @@ Admin accounts must enroll TOTP before they receive a fully authenticated sessio
 | `/opt/hytale/Server/whitelist.json` | hytale | hytale | 664 | Whitelist (helper writes via group) |
 | `/opt/hytale/Server/bans.json` | hytale | hytale | 664 | Bans (helper writes via group) |
 | `/opt/hytale-backups/` | hytale | hytale | 2770 | Backup storage (helper writes via group; setgid keeps group ownership) |
+| `/opt/hytale/mods/` | hytale | hytale | 2770 | Active Hytale mods |
+| `/opt/hytale/mods-disabled/` | hytale | hytale | 2770 | Disabled Hytale mods |
+| `/opt/hytale/mod-backups/` | hytale | hytale | 2770 | Helper-created mod snapshots |
+| `/opt/hytale-panel-data/mod-upload-staging/` | 1000 | hytale-panel | 2770 | API-only raw mod upload staging; helper reads staged files before install |
 | `/opt/hytale-panel/helper/` | root | hytale-panel | 750 | Helper service code |
 | `/opt/hytale-panel/helper/.env` | root | hytale-panel | 640 | Helper secrets |
 | `/opt/hytale-panel/run/` | hytale-helper | hytale-panel | 770 | Stable helper socket directory |

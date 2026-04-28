@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiPost, apiRequest, setCsrfToken } from '../../packages/web/src/lib/api-client';
+import { apiPost, apiRequest, apiUploadMod, setCsrfToken } from '../../packages/web/src/lib/api-client';
 
 describe('web api client', () => {
   beforeEach(() => {
@@ -101,6 +101,24 @@ describe('web api client', () => {
         },
       },
       statusCode: 202,
+    });
+  });
+
+  it('uploads mods as raw octet-stream with the filename carried in a header', async () => {
+    setCsrfToken('csrf-token');
+    const file = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Cool Mod.jar');
+
+    await apiUploadMod('/api/mods/upload', file);
+
+    expect(fetch).toHaveBeenCalledWith('/api/mods/upload', {
+      method: 'POST',
+      body: file,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-CSRF-Token': 'csrf-token',
+        'X-Mod-Filename': 'Cool%20Mod.jar',
+      },
     });
   });
 });

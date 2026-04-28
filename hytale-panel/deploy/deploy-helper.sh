@@ -73,6 +73,10 @@ ROOT_ENV_FILE="$SCRIPT_DIR/.env"
 HELPER_ENV_FILE="/opt/hytale-panel/helper/.env"
 HELPER_WRAPPER_DIR="/usr/local/lib/hytale-panel"
 HELPER_JOURNALCTL_WRAPPER="${HELPER_WRAPPER_DIR}/hytale-helper-journalctl"
+MOD_UPLOAD_STAGING_DIR="/opt/hytale-panel-data/mod-upload-staging"
+MODS_DIR="/opt/hytale/mods"
+DISABLED_MODS_DIR="/opt/hytale/mods-disabled"
+MOD_BACKUP_DIR="/opt/hytale/mod-backups"
 HOST_HELPER_RUNTIME_DIR="/opt/hytale-panel/run"
 HOST_HELPER_SOCKET_PATH="${HOST_HELPER_RUNTIME_DIR}/hytale-helper.sock"
 LEGACY_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
@@ -100,6 +104,16 @@ set_env_var() {
   fi
 }
 
+ensure_env_var_if_missing() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+
+  if ! grep -q "^${key}=" "$file"; then
+    set_env_var "$file" "$key" "$value"
+  fi
+}
+
 ensure_helper_user() {
   if ! getent group "$PANEL_SOCKET_GROUP" >/dev/null; then
     log_error "Missing group $PANEL_SOCKET_GROUP. Run sudo ./install.sh first."
@@ -118,6 +132,14 @@ ensure_helper_user() {
     usermod -g "$PANEL_SOCKET_GROUP" -aG hytale "$HELPER_USER"
     log_ok "User $HELPER_USER is present"
   fi
+}
+
+prepare_mod_directories() {
+  mkdir -p "$MOD_UPLOAD_STAGING_DIR" "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"
+  chown 1000:"$PANEL_SOCKET_GROUP" "$MOD_UPLOAD_STAGING_DIR"
+  chmod 2770 "$MOD_UPLOAD_STAGING_DIR"
+  chown hytale:hytale "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"
+  chmod 2770 "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"
 }
 
 wait_for_socket() {
@@ -199,6 +221,11 @@ migrate_helper_env_socket_path() {
   fi
 
   set_env_var "$HELPER_ENV_FILE" HELPER_SOCKET_PATH "$HOST_HELPER_SOCKET_PATH"
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" MODS_PATH "$MODS_DIR"
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" DISABLED_MODS_PATH "$DISABLED_MODS_DIR"
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_UPLOAD_STAGING_PATH "$MOD_UPLOAD_STAGING_DIR"
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_BACKUP_PATH "$MOD_BACKUP_DIR"
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_BACKUP_RETENTION 10
   chown root:"$PANEL_SOCKET_GROUP" "$HELPER_ENV_FILE"
   chmod 640 "$HELPER_ENV_FILE"
 }
@@ -271,6 +298,7 @@ log_ok "Files deployed"
 log_info "Refreshing the shipped helper unit and migrating older installs..."
 cp "$SCRIPT_DIR/systemd/hytale-helper.service" /etc/systemd/system/
 ensure_helper_user
+prepare_mod_directories
 install_helper_sudoers
 retire_legacy_helper_override
 migrate_helper_env_socket_path

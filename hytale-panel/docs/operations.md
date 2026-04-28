@@ -9,9 +9,11 @@ Day-to-day operations, monitoring, log management, and maintenance procedures.
 3. [Log Management](#log-management)
 4. [Database Maintenance](#database-maintenance)
 5. [Backup Management](#backup-management)
-6. [User Management](#user-management)
-7. [Scheduled Tasks](#scheduled-tasks)
-8. [Troubleshooting](#troubleshooting)
+6. [Mods Management](#mods-management)
+7. [User Management](#user-management)
+8. [Scheduled Tasks](#scheduled-tasks)
+9. [Whitelist Management](#whitelist-management)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -207,6 +209,11 @@ socket health checks now distinguish between the host path
 `/opt/hytale-panel/run/hytale-helper.sock` and the container-visible bind mount
 `/run/hytale-helper/hytale-helper.sock`.
 
+The Mods Manager uses a narrow API write mount at
+`/opt/hytale-panel-data/mod-upload-staging`. The API stages raw `.jar` / `.zip`
+uploads there only; the host helper validates the staged ID and moves files into
+`/opt/hytale/mods`.
+
 The shipped `hytale-tmux.service` also provides a dedicated writable temp
 directory at `/opt/hytale/tmp` and exports it through `TMPDIR` and
 `JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/opt/hytale/tmp`. That avoids native
@@ -374,6 +381,29 @@ find /opt/hytale-backups/ -name "*.tar.gz" -mtime +30 -ls
 
 # Delete (be careful!)
 find /opt/hytale-backups/ -name "*.tar.gz" -mtime +30 -delete
+```
+
+---
+
+## Mods Management
+
+### Storage Expectations
+
+- Active mods: `/opt/hytale/mods`
+- Disabled mods: `/opt/hytale/mods-disabled`
+- Raw upload staging: `/opt/hytale-panel-data/mod-upload-staging`
+- Mod snapshots: `/opt/hytale/mod-backups`
+
+Upload mods from the panel's Mods page. The API only writes staged files; the
+host helper performs install, enable, disable, backup, rollback, and restart
+verification actions.
+
+### Manual Checks
+
+```bash
+sudo ls -lah /opt/hytale/mods /opt/hytale/mods-disabled
+sudo ls -lah /opt/hytale/mod-backups | tail
+sudo ls -lah /opt/hytale-panel-data/mod-upload-staging
 ```
 
 ---
