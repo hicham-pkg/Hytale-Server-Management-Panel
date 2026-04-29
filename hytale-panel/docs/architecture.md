@@ -451,10 +451,22 @@ The helper service provides a clean, auditable, validatable boundary between the
 | `bans.write` | `entries: BanEntry[]` | Zod-validated JSON array |
 | `backup.create` | `label?: string` | Label alphanumeric+dash, max 50 chars |
 | `backup.list` | none | Read-only |
-| `backup.restore` | `backupId: string` | Server must be stopped; safety snapshot first |
-| `backup.delete` | `backupId: string` | UUID format validation |
+| `backup.restore` | `backupId \| filename` | Server must be stopped; DB UUID backups and validated disk-only filenames are supported |
+| `backup.delete` | `backupId \| filename` | DB UUID backups and validated `.tar.gz` filenames only; backup path must stay under backup root |
+| `backup.hash` | `backupId \| filename` | Read-only SHA256 calculation for validated backup files |
+| `backup.operationStatus` | `operationId: string` | Read-only helper-side backup/restore operation reconciliation |
+| `mods.list` | none | Read-only list of active/disabled `.jar`/`.zip` files |
+| `mods.installStaged` | `stagedId, sanitizedName, sha256, replace?` | Staged UUID file only; helper verifies staging path, hash, extension, destination, and duplicate/replace policy |
+| `mods.disable` | `name: string` | Validated mod filename only; creates backup first |
+| `mods.enable` | `name: string` | Validated mod filename only; creates backup first |
+| `mods.remove` | `name: string` | Validated mod filename only; creates backup/trash record |
+| `mods.backup` | none | Creates timestamped mods backup with retention |
+| `mods.rollback` | `backupName?: string` | Restores only validated backup contents under mods paths |
+| `mods.restartVerify` | `autoRollback?: boolean` | Uses existing server restart path and bounded startup log verification |
 | `stats.system` | none | Read-only (CPU, RAM, disk) |
 | `stats.process` | none | Read-only (Hytale process stats) |
+| `panelUpdate.start` | `targetTag, downloadUrl, tarballType, currentVersion, expectedSha256?` | Release/tag archive URL only; helper writes job spec and starts systemd runner |
+| `panelUpdate.rollback` | `backupPath?: string` | Backup path must stay under panel update backup root; helper starts systemd runner |
 
 ### Forbidden Operations (Explicitly Blocked)
 
@@ -469,8 +481,24 @@ The helper service provides a clean, auditable, validatable boundary between the
 | Arbitrary systemctl commands | Only hytale-tmux.service allowed |
 | Arbitrary journalctl queries | Only hytale-tmux.service allowed |
 | Direct database access from frontend | All queries go through API |
-| File upload to game server | Not needed; attack surface |
+| Direct API upload/write to game server paths | Mods upload only writes to `/opt/hytale-panel-data/mod-upload-staging`; helper alone installs into `/opt/hytale/mods` |
 | Backup to arbitrary paths | Only /opt/hytale-backups/ |
+
+### Mods Manager Boundary
+
+The API accepts raw `.jar`/`.zip` uploads and writes only generated staged files under `/opt/hytale-panel-data/mod-upload-staging`. It does not mount or write `/opt/hytale`. The helper validates the staged UUID, sanitized display filename, SHA256, extension, staging realpath, and final destination before moving a file into `/opt/hytale/mods` or `/opt/hytale/mods-disabled`.
+
+### Backup Identifiers
+
+Backups can be tracked by database UUIDs or discovered as disk-only `.tar.gz` files after migration/manual recovery. Routes and helper calls accept only DB UUIDs or filenames matching the backup filename allowlist. The resolved backup path must remain under the configured backup root, and restore archive entries are validated before extraction.
+
+### Panel Updater Boundary
+
+Panel update jobs are started by the helper and executed by a root-owned systemd runner. The API never downloads or applies update archives directly. Download URLs must point at configured GitHub release/tag archives (`github.com/.../archive/refs/tags/...` or `codeload.github.com/.../refs/tags/...`); branch archives, opaque object URLs, and arbitrary URLs are rejected.
+
+### Future Hytale Server Update Manager Note
+
+If a future Hytale Server Update Manager applies server files or must survive API/helper restarts, use a detached host-side job model similar to Panel Updater. The API must not run `systemctl`, `tmux`, `sudo`, Docker, or file mutations directly. Keep the helper as the privileged boundary, reuse existing helper lifecycle/status logic where practical, and use a shared job status/log response shape so Panel Updater and Hytale updates do not drift.
 
 ---
 

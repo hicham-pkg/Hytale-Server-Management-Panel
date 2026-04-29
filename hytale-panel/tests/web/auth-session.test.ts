@@ -5,6 +5,8 @@ describe('auth session route classification', () => {
   it('classifies protected routes correctly', () => {
     expect(isProtectedPath('/dashboard')).toBe(true);
     expect(isProtectedPath('/dashboard/live')).toBe(true);
+    expect(isProtectedPath('/mods')).toBe(true);
+    expect(isProtectedPath('/mods/install')).toBe(true);
     expect(isProtectedPath('/login')).toBe(false);
   });
 
@@ -12,6 +14,7 @@ describe('auth session route classification', () => {
     expect(isAdminOnlyPath('/audit')).toBe(true);
     expect(isAdminOnlyPath('/settings/users')).toBe(true);
     expect(isAdminOnlyPath('/backups')).toBe(false);
+    expect(isAdminOnlyPath('/mods')).toBe(false);
     expect(isAdminOnlyPath('/dashboard')).toBe(false);
   });
 });

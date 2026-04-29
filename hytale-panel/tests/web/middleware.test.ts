@@ -26,4 +26,11 @@ describe('protected route middleware', () => {
     expect(response.headers.get('location')).toBeNull();
     expect(response.headers.get('x-middleware-next')).toBe('1');
   });
+
+  it('redirects unauthenticated mods page access to /login', () => {
+    const response = middleware(makeRequest('/mods'));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('https://panel.example/login');
+  });
 });

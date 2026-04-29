@@ -4,6 +4,7 @@ export const PROTECTED_ROUTE_PREFIXES = [
   '/whitelist',
   '/bans',
   '/backups',
+  '/mods',
   '/crashes',
   '/audit',
   '/settings',

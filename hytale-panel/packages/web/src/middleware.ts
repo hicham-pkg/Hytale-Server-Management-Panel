@@ -22,6 +22,7 @@ export const config = {
     '/whitelist/:path*',
     '/bans/:path*',
     '/backups/:path*',
+    '/mods/:path*',
     '/crashes/:path*',
     '/audit/:path*',
     '/settings/:path*',
