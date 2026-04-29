@@ -90,12 +90,12 @@ describe('Backup Restore Safety — Filename Validation', () => {
 });
 
 describe('Backup Restore Safety — Extraction Safety', () => {
-  it('should extract to parent of worlds directory only', () => {
+  it('should extract modern archives to parent of universe directory only', () => {
     // tar -xzf backup.tar.gz -C /opt/hytale/Server
-    // This extracts relative to Server/, so worlds/ goes to Server/worlds/
+    // This extracts relative to Server/, so universe/ goes to Server/universe/
     const extractBase = '/opt/hytale/Server';
-    const worldsPath = '/opt/hytale/Server/worlds';
-    const parentDir = worldsPath.substring(0, worldsPath.lastIndexOf('/'));
+    const saveRoot = '/opt/hytale/Server/universe';
+    const parentDir = saveRoot.substring(0, saveRoot.lastIndexOf('/'));
     expect(parentDir).toBe(extractBase);
   });
 });

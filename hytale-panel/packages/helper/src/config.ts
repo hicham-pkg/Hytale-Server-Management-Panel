@@ -25,6 +25,7 @@ const ConfigSchema = z.object({
   tmuxSocketPath: SocketPathSchema.default('/opt/hytale/run/hytale.tmux.sock'),
   whitelistPath: JsonFilePathSchema.default('/opt/hytale/Server/whitelist.json'),
   bansPath: JsonFilePathSchema.default('/opt/hytale/Server/bans.json'),
+  hytaleSaveRoot: AbsolutePathSchema.optional(),
   worldsPath: AbsolutePathSchema.default('/opt/hytale/Server/worlds'),
   // Panel updater (V2). Defaults match install.sh / docker-compose.yml.
   panelUpdateJobsDir: AbsolutePathSchema.default('/opt/hytale-panel-data/update-jobs'),
@@ -64,6 +65,7 @@ export function loadConfig(): HelperConfig {
     tmuxSocketPath: process.env.TMUX_SOCKET_PATH,
     whitelistPath: process.env.WHITELIST_PATH,
     bansPath: process.env.BANS_PATH,
+    hytaleSaveRoot: process.env.HYTALE_SAVE_ROOT || process.env.HYTALE_UNIVERSE_DIR,
     worldsPath: process.env.WORLDS_PATH,
     panelUpdateJobsDir: process.env.PANEL_UPDATE_JOBS_DIR,
     panelUpdateBackupRoot: process.env.PANEL_UPDATE_BACKUP_ROOT,

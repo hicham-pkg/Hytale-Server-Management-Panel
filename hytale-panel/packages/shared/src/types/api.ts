@@ -126,6 +126,7 @@ export interface ModActionResponse {
 export interface ModRestartVerifyResponse {
   restartSucceeded: boolean;
   startupOk: boolean;
+  verificationStatus: 'passed' | 'failed' | 'inconclusive';
   errors: string[];
   rollbackPerformed: boolean;
   rollbackBackupName?: string;
@@ -147,6 +148,7 @@ export interface PanelUpdateStatus {
   currentCommit?: string;
   latestVersion: string | null;
   latestTag: string | null;
+  checkStatus: 'ok' | 'unable_to_check';
   updateAvailable: boolean;
   releaseUrl: string | null;
   releaseName: string | null;

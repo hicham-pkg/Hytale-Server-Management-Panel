@@ -92,6 +92,7 @@ describe('GET /api/system/updates/status', () => {
       currentVersion: '1.1.0',
       latestVersion: '1.1.0',
       latestTag: 'v1.1.0',
+      checkStatus: 'ok',
       updateAvailable: false,
       releaseUrl: 'https://github.com/owner/repo/releases/tag/v1.1.0',
       releaseName: '1.1.0',
@@ -121,6 +122,7 @@ describe('GET /api/system/updates/status', () => {
       force: false,
       currentVersion: '1.1.0',
       latestVersion: '1.1.0',
+      checkStatus: 'ok',
       updateAvailable: false,
     });
 
@@ -133,6 +135,7 @@ describe('GET /api/system/updates/status', () => {
       currentVersion: '1.1.0',
       latestVersion: '1.2.0',
       latestTag: 'v1.2.0',
+      checkStatus: 'ok',
       updateAvailable: true,
       releaseUrl: 'https://github.com/owner/repo/releases/tag/v1.2.0',
       releaseName: 'patch',
@@ -158,6 +161,7 @@ describe('GET /api/system/updates/status', () => {
       currentVersion: '1.1.0',
       latestVersion: null,
       latestTag: null,
+      checkStatus: 'unable_to_check',
       updateAvailable: false,
       releaseUrl: null,
       releaseName: null,
@@ -175,7 +179,10 @@ describe('GET /api/system/updates/status', () => {
     expect(res.json().data.error).toBe('GitHub API responded 503');
     expect(auditMock.logAudit.mock.calls[0][0]).toMatchObject({
       success: false,
-      details: expect.objectContaining({ error: 'GitHub API responded 503' }),
+      details: expect.objectContaining({
+        checkStatus: 'unable_to_check',
+        error: 'GitHub API responded 503',
+      }),
     });
 
     await app.close();
@@ -188,6 +195,7 @@ describe('GET /api/system/updates/status', () => {
       currentVersion: '1.1.0',
       latestVersion: '1.1.0',
       latestTag: 'v1.1.0',
+      checkStatus: 'ok',
       updateAvailable: false,
       releaseUrl: 'https://github.com/owner/repo',
       releaseName: '1.1.0',

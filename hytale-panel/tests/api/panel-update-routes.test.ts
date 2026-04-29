@@ -124,6 +124,7 @@ describe('POST /api/system/updates/start', () => {
       currentVersion: '1.1.0',
       latestVersion: '1.1.0',
       latestTag: 'v1.1.0',
+      checkStatus: 'ok',
       updateAvailable: false,
     });
     const app = await buildApp();
@@ -133,12 +134,39 @@ describe('POST /api/system/updates/start', () => {
     await app.close();
   });
 
+  it('returns 503 when GitHub Releases cannot be checked before starting an update', async () => {
+    mockUserState.user = ADMIN;
+    updateCheckerMock.getUpdateStatus.mockResolvedValue({
+      currentVersion: '1.2.1',
+      latestVersion: null,
+      latestTag: null,
+      checkStatus: 'unable_to_check',
+      updateAvailable: false,
+      error: 'GitHub API responded 404',
+    });
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/api/system/updates/start', payload: {} });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toMatch(/Could not check GitHub Releases/);
+    expect(res.json().error).not.toMatch(/token|ghp_/i);
+    expect(panelUpdateMock.startPanelUpdate).not.toHaveBeenCalled();
+    expect(auditMock.logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'panel.update_start',
+        success: false,
+        details: expect.objectContaining({ reason: 'update-check-unavailable' }),
+      }),
+    );
+    await app.close();
+  });
+
   it('happy path: forwards to helper service and audits success', async () => {
     mockUserState.user = ADMIN;
     updateCheckerMock.getUpdateStatus.mockResolvedValue({
       currentVersion: '1.1.0',
       latestVersion: '1.2.0',
       latestTag: 'v1.2.0',
+      checkStatus: 'ok',
       updateAvailable: true,
     });
     panelUpdateMock.startPanelUpdate.mockResolvedValue({

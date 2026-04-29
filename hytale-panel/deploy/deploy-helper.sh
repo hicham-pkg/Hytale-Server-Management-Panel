@@ -220,7 +220,12 @@ migrate_helper_env_socket_path() {
     log_info "Migrating helper HELPER_SOCKET_PATH from $current_socket_path to $HOST_HELPER_SOCKET_PATH"
   fi
 
+  local hytale_root
+  hytale_root="$(read_env_value "$HELPER_ENV_FILE" HYTALE_ROOT || true)"
+  hytale_root="${hytale_root:-/opt/hytale}"
+
   set_env_var "$HELPER_ENV_FILE" HELPER_SOCKET_PATH "$HOST_HELPER_SOCKET_PATH"
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SAVE_ROOT "$hytale_root/Server/universe"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" MODS_PATH "$MODS_DIR"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" DISABLED_MODS_PATH "$DISABLED_MODS_DIR"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_UPLOAD_STAGING_PATH "$MOD_UPLOAD_STAGING_DIR"

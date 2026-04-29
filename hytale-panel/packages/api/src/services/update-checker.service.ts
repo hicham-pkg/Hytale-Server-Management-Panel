@@ -24,6 +24,7 @@ export interface UpdateStatus {
   currentCommit?: string;
   latestVersion: string | null;
   latestTag: string | null;
+  checkStatus: 'ok' | 'unable_to_check';
   updateAvailable: boolean;
   releaseUrl: string | null;
   releaseName: string | null;
@@ -214,6 +215,7 @@ export async function getUpdateStatus(options: { force?: boolean } = {}): Promis
     currentCommit,
     latestVersion: null,
     latestTag: null,
+    checkStatus: 'unable_to_check',
     updateAvailable: false,
     releaseUrl: null,
     releaseName: null,
@@ -246,6 +248,7 @@ export async function getUpdateStatus(options: { force?: boolean } = {}): Promis
 
     const status: UpdateStatus = {
       ...baseStatus,
+      checkStatus: 'ok',
       latestTag,
       latestVersion,
       updateAvailable,

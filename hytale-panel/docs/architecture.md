@@ -189,7 +189,7 @@ This document describes the architecture for a self-hosted, production-grade web
        ├── write /opt/hytale/Server/whitelist.json (validated JSON only)
        ├── read /opt/hytale/Server/bans.json
        ├── write /opt/hytale/Server/bans.json (validated JSON only)
-       ├── create backup (tar.gz /opt/hytale/Server/worlds/ → /opt/hytale-backups/)
+       ├── create backup (tar.gz /opt/hytale/Server/universe/ → /opt/hytale-backups/, legacy worlds/ supported)
        ├── list backups in /opt/hytale-backups/
        ├── restore backup (with server-stopped precondition)
        └── read system stats (cpu, memory, disk via /proc and df)

@@ -22,6 +22,7 @@ export interface ModInfo {
 export interface ModRestartVerifyResult {
   restartSucceeded: boolean;
   startupOk: boolean;
+  verificationStatus: 'passed' | 'failed' | 'inconclusive';
   errors: string[];
   rollbackPerformed: boolean;
   rollbackBackupName?: string;
@@ -456,17 +457,29 @@ export function restartAndVerifyServer(
     const restartResult = await restartServer(config);
     const logs = await readLogs(config, 200);
     const errors = logs.success ? detectStartupErrors(logs.lines) : [];
-    const startupOk = restartResult.success && errors.length === 0;
+    const verificationStatus: ModRestartVerifyResult['verificationStatus'] = !restartResult.success
+      ? 'failed'
+      : !logs.success
+        ? 'inconclusive'
+        : errors.length === 0
+          ? 'passed'
+          : 'failed';
+    const startupOk = verificationStatus === 'passed';
 
-    if (startupOk || !autoRollback) {
+    if (startupOk || verificationStatus === 'inconclusive' || !autoRollback) {
       return {
         restartSucceeded: restartResult.success,
         startupOk,
+        verificationStatus,
         errors,
         rollbackPerformed: false,
         message: startupOk
-          ? 'Server restarted and no common mod startup errors were detected'
-          : restartResult.message,
+          ? 'Server restart completed. Initial log check found no known startup errors.'
+          : verificationStatus === 'inconclusive'
+            ? 'Server restarted, but startup verification was inconclusive. Check the console logs.'
+            : errors.length > 0
+              ? 'Startup verification found known startup errors. Review the detected log lines.'
+              : restartResult.message ?? 'Server restart failed',
       };
     }
 
@@ -475,6 +488,7 @@ export function restartAndVerifyServer(
     return {
       restartSucceeded: restartResult.success,
       startupOk: false,
+      verificationStatus: 'failed',
       errors,
       rollbackPerformed: true,
       rollbackBackupName: rollback.backupName,

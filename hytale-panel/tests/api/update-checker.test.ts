@@ -80,6 +80,7 @@ describe('update-checker.service', () => {
 
       expect(status.currentVersion).toBe('1.1.0');
       expect(status.latestVersion).toBe('1.1.0');
+      expect(status.checkStatus).toBe('ok');
       expect(status.updateAvailable).toBe(false);
       expect(status.error).toBeUndefined();
       expect(status.fromCache).toBe(false);
@@ -107,6 +108,7 @@ describe('update-checker.service', () => {
       const status = await svc.getUpdateStatus();
 
       expect(status.updateAvailable).toBe(true);
+      expect(status.checkStatus).toBe('ok');
       expect(status.latestVersion).toBe('1.2.0');
       // URL must match the configured repo — server-side hardening drops it
       // otherwise (see release URL safety tests below).
@@ -127,12 +129,29 @@ describe('update-checker.service', () => {
       const status = await svc.getUpdateStatus();
 
       expect(status.error).toMatch(/GitHub API responded 503/);
+      expect(status.checkStatus).toBe('unable_to_check');
       expect(status.updateAvailable).toBe(false);
       expect(status.latestVersion).toBeNull();
       // Errors must not poison the cache.
       const second = await svc.getUpdateStatus();
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(second.error).toBeDefined();
+    });
+
+    it('reports 404 latest-release failures as unable to check, not up to date', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        mockReleaseResponse({}, false, 404),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      const svc = await loadService();
+      const status = await svc.getUpdateStatus();
+
+      expect(status.error).toBe('GitHub API responded 404');
+      expect(status.checkStatus).toBe('unable_to_check');
+      expect(status.latestVersion).toBeNull();
+      expect(status.latestTag).toBeNull();
+      expect(status.updateAvailable).toBe(false);
     });
 
     it('normalizes raw fetch failures to a generic message (no leakage)', async () => {
@@ -145,6 +164,7 @@ describe('update-checker.service', () => {
       const status = await svc.getUpdateStatus();
 
       expect(status.error).toBe('GitHub release check failed');
+      expect(status.checkStatus).toBe('unable_to_check');
       // Defensive: token / hostname must not leak into the response.
       expect(JSON.stringify(status)).not.toContain('ECONNREFUSED');
       expect(JSON.stringify(status)).not.toContain('abc123');

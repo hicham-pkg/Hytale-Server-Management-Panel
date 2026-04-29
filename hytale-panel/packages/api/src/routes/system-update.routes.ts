@@ -44,6 +44,7 @@ export async function systemUpdateRoutes(fastify: FastifyInstance): Promise<void
           fromCache: status.fromCache,
           currentVersion: status.currentVersion,
           latestVersion: status.latestVersion,
+          checkStatus: status.checkStatus,
           updateAvailable: status.updateAvailable,
           ...(status.error ? { error: status.error } : {}),
         },
@@ -79,6 +80,26 @@ export async function systemUpdateRoutes(fastify: FastifyInstance): Promise<void
       // updateChecker result; we re-check here for freshness AND to derive
       // the canonical download URL inside the trust boundary.
       const fresh = await updateChecker.getUpdateStatus({ force: true });
+      if (fresh.checkStatus !== 'ok') {
+        await logAudit({
+          userId: request.currentUser!.id,
+          action: 'panel.update_start',
+          ipAddress: request.ip,
+          success: false,
+          details: {
+            reason: 'update-check-unavailable',
+            currentVersion: fresh.currentVersion,
+            latestVersion: fresh.latestVersion,
+            ...(fresh.error ? { error: fresh.error } : {}),
+          },
+        });
+        return reply.status(503).send({
+          success: false,
+          error: fresh.error
+            ? `Could not check GitHub Releases: ${fresh.error}`
+            : 'Could not check GitHub Releases',
+        });
+      }
       if (!fresh.updateAvailable || !fresh.latestVersion || !fresh.latestTag) {
         await logAudit({
           userId: request.currentUser!.id,

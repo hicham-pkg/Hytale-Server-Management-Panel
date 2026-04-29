@@ -1017,6 +1017,7 @@ TMUX_SOCKET_PATH=/opt/hytale/run/hytale.tmux.sock
 # Game server file paths
 WHITELIST_PATH=$HYTALE_SERVER_PATH/whitelist.json
 BANS_PATH=$HYTALE_SERVER_PATH/bans.json
+HYTALE_SAVE_ROOT=$HYTALE_SERVER_PATH/universe
 WORLDS_PATH=$HYTALE_SERVER_PATH/worlds
 HELPEREOF
 
@@ -1046,6 +1047,7 @@ ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SESSION hytale
 ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SOCKET_PATH /opt/hytale/run/hytale.tmux.sock
 ensure_env_var_if_missing "$HELPER_ENV_FILE" WHITELIST_PATH "$HYTALE_SERVER_PATH/whitelist.json"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" BANS_PATH "$HYTALE_SERVER_PATH/bans.json"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SAVE_ROOT "$HYTALE_SERVER_PATH/universe"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" WORLDS_PATH "$HYTALE_SERVER_PATH/worlds"
 chown root:"$PANEL_SOCKET_GROUP" "$HELPER_ENV_FILE"
 chmod 640 "$HELPER_ENV_FILE"

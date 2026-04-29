@@ -353,7 +353,9 @@ docker compose exec postgres psql -U hytale_panel -c "VACUUM ANALYZE;"
 ### Storage Expectations
 
 - Backups are stored at `/opt/hytale-backups/`
-- Each backup is a tar.gz of the worlds directory
+- Each backup is a tar.gz of the Hytale save root. Modern installs use
+  `/opt/hytale/Server/universe` so `worlds/`, `players/`, and save metadata
+  stay together. Legacy `/opt/hytale/Server/worlds` backups are still accepted.
 - Typical size: 100MB–10GB depending on world size
 - Plan for at least 5× your world size for backup storage
 
@@ -361,7 +363,7 @@ docker compose exec postgres psql -U hytale_panel -c "VACUUM ANALYZE;"
 
 ```bash
 sudo -u hytale tar -czf /opt/hytale-backups/manual-$(date +%Y%m%d-%H%M%S).tar.gz \
-  -C /opt/hytale/Server worlds/
+  -C /opt/hytale/Server universe/
 ```
 
 ### Monitoring Backup Disk Usage
@@ -637,9 +639,12 @@ The release flow:
 4. `git push origin main && git push origin vX.Y.Z`.
 
 The update checker reads `tag_name` from the `/releases/latest` GitHub
-endpoint, strips a leading `v`, and compares semver-style. Drafts and
-prereleases are surfaced via the `prerelease` flag but still flagged as
-"update available" if they sort higher than the current version.
+endpoint, strips a leading `v`, and compares semver-style. It uses GitHub
+Releases, not tags alone: a pushed git tag without a published GitHub Release
+may show as "unable to check" or may not appear as the latest release. Private
+repos need `GITHUB_UPDATE_TOKEN` with read access. Drafts and prereleases are
+surfaced via the `prerelease` flag but still flagged as "update available" if
+they sort higher than the current version.
 
 ### Security notes
 

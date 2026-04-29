@@ -18,6 +18,7 @@ interface PanelUpdateStatus {
   currentCommit?: string;
   latestVersion: string | null;
   latestTag: string | null;
+  checkStatus: 'ok' | 'unable_to_check';
   updateAvailable: boolean;
   releaseUrl: string | null;
   releaseName: string | null;
@@ -412,7 +413,13 @@ export default function DashboardPage() {
                 <p className="text-sm text-muted-foreground">Checking for updates…</p>
               )}
               {updateError && !updateStatus?.latestVersion && (
-                <p className="text-sm text-yellow-400">{updateError}</p>
+                <div className="space-y-1 text-sm text-yellow-400">
+                  <p>{updateError}</p>
+                  <p className="text-xs text-yellow-300">
+                    Could not check GitHub Releases. Publish a release for the configured tag/repo,
+                    or configure GITHUB_UPDATE_TOKEN if the repo is private.
+                  </p>
+                </div>
               )}
               {updateStatus && (
                 <div className="space-y-2 text-sm">
@@ -436,7 +443,9 @@ export default function DashboardPage() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Status</span>
                     <span>
-                      {updateStatus.updateAvailable ? (
+                      {updateStatus.checkStatus !== 'ok' ? (
+                        <span className="text-yellow-400">Unable to check</span>
+                      ) : updateStatus.updateAvailable ? (
                         <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
                           Update available
                         </span>
@@ -445,7 +454,7 @@ export default function DashboardPage() {
                       )}
                     </span>
                   </div>
-                  {updateStatus.updateAvailable && !updateJob && (
+                  {updateStatus.checkStatus === 'ok' && updateStatus.updateAvailable && !updateJob && (
                     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                       <p className="font-medium">One-click update is available.</p>
                       <p className="mt-1">

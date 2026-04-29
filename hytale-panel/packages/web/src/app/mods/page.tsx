@@ -49,6 +49,7 @@ interface ModActionResponse {
 interface ModRestartVerifyResponse {
   restartSucceeded: boolean;
   startupOk: boolean;
+  verificationStatus: 'passed' | 'failed' | 'inconclusive';
   errors: string[];
   rollbackPerformed: boolean;
   rollbackBackupName?: string;
@@ -364,7 +365,7 @@ export default function ModsPage() {
                       </Button>
                       <ConfirmDialog
                         title="Install and Restart"
-                        description="This installs the staged mod, restarts the Hytale service, scans recent logs for common mod startup errors, and rolls back automatically if verification fails."
+                        description="This installs the staged mod, restarts the Hytale service, scans recent logs for known startup errors, and rolls back automatically if verification fails."
                         confirmLabel="Install + Restart"
                         variant="destructive"
                         onConfirm={() => handleInstall(true, false)}
@@ -449,7 +450,7 @@ export default function ModsPage() {
                 </ConfirmDialog>
                 <ConfirmDialog
                   title="Restart Server"
-                  description="Restart hytale-tmux.service and scan recent logs for common mod startup errors. This may disconnect online players."
+                  description="Restart hytale-tmux.service and scan recent logs for known startup errors. This may disconnect online players."
                   confirmLabel="Restart"
                   variant="destructive"
                   onConfirm={handleRestart}
@@ -471,10 +472,18 @@ export default function ModsPage() {
           <CardContent>
             {restartResult ? (
               <div className="space-y-3 text-sm">
-                <p className={restartResult.startupOk ? 'text-emerald-400' : 'text-red-400'}>{restartResult.message}</p>
+                <p className={
+                  restartResult.verificationStatus === 'passed'
+                    ? 'text-emerald-400'
+                    : restartResult.verificationStatus === 'inconclusive'
+                      ? 'text-yellow-400'
+                      : 'text-red-400'
+                }>
+                  {restartResult.message}
+                </p>
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                   <span>Restart: {restartResult.restartSucceeded ? 'succeeded' : 'failed'}</span>
-                  <span>Startup check: {restartResult.startupOk ? 'passed' : 'failed'}</span>
+                  <span>Startup check: {restartResult.verificationStatus}</span>
                   <span>Rollback: {restartResult.rollbackPerformed ? 'performed' : 'not performed'}</span>
                 </div>
                 {restartResult.errors.length > 0 && (
@@ -484,7 +493,7 @@ export default function ModsPage() {
                 )}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">Restart verification results and detected mod startup errors will appear here.</p>
+              <p className="text-sm text-muted-foreground">Restart verification results and detected known startup errors will appear here.</p>
             )}
           </CardContent>
         </Card>

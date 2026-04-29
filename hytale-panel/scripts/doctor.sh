@@ -204,6 +204,7 @@ POSTGRES_HOST_PORT="$(resolve_config_value POSTGRES_HOST_PORT 5432 "$ROOT_ENV_FI
 HYTALE_ROOT="$(resolve_config_value HYTALE_ROOT /opt/hytale "$HELPER_ENV_FILE")"
 WHITELIST_PATH="$(resolve_config_value WHITELIST_PATH "$HYTALE_ROOT/Server/whitelist.json" "$HELPER_ENV_FILE")"
 BANS_PATH="$(resolve_config_value BANS_PATH "$HYTALE_ROOT/Server/bans.json" "$HELPER_ENV_FILE")"
+HYTALE_SAVE_ROOT="$(resolve_config_value HYTALE_SAVE_ROOT "$HYTALE_ROOT/Server/universe" "$HELPER_ENV_FILE")"
 WORLDS_PATH="$(resolve_config_value WORLDS_PATH "$HYTALE_ROOT/Server/worlds" "$HELPER_ENV_FILE")"
 BACKUP_PATH="$(resolve_config_value BACKUP_PATH /opt/hytale-backups "$HELPER_ENV_FILE")"
 
@@ -1029,7 +1030,7 @@ check_hytale_world() {
     fail "HYTALE_ROOT missing ($HYTALE_ROOT)" "install the Hytale server files at $HYTALE_ROOT, or edit HYTALE_ROOT in $HELPER_ENV_FILE"
   fi
 
-  for entry in "whitelist:$WHITELIST_PATH:file" "bans:$BANS_PATH:file" "worlds:$WORLDS_PATH:dir"; do
+  for entry in "whitelist:$WHITELIST_PATH:file" "bans:$BANS_PATH:file"; do
     local label path kind
     label="${entry%%:*}"
     path="${entry#*:}"; path="${path%:*}"
@@ -1050,6 +1051,22 @@ check_hytale_world() {
       fi
     fi
   done
+
+  local modern_worlds_path modern_players_path
+  modern_worlds_path="$HYTALE_SAVE_ROOT/worlds"
+  modern_players_path="$HYTALE_SAVE_ROOT/players"
+  if sudo -n test -d "$modern_worlds_path" 2>/dev/null || [ -d "$modern_worlds_path" ]; then
+    ok "modern worlds/ directory exists ($modern_worlds_path)"
+    if sudo -n test -d "$modern_players_path" 2>/dev/null || [ -d "$modern_players_path" ]; then
+      ok "modern players/ directory exists ($modern_players_path)"
+    else
+      warn "modern players/ directory not present ($modern_players_path)" "Hytale may create players/ after player data is saved"
+    fi
+  elif sudo -n test -d "$WORLDS_PATH" 2>/dev/null || [ -d "$WORLDS_PATH" ]; then
+    ok "legacy worlds/ directory exists ($WORLDS_PATH)"
+  else
+    warn "save worlds directory missing (checked $modern_worlds_path and $WORLDS_PATH)" "Hytale creates save data on first launch; install game files and start hytale-tmux.service"
+  fi
 
   if [ -S "$TMUX_SOCKET_PATH" ]; then
     TMUX_SOCKET_EXISTS=1

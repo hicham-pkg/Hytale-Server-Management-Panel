@@ -84,6 +84,15 @@ interface CreateBackupPlan {
   filename: string;
 }
 
+interface SaveLayout {
+  kind: 'modern' | 'legacy';
+  rootPath: string;
+  requiredWorldsPath: string;
+  archiveRootDir: string;
+  extractParent: string;
+  checkedPath: string;
+}
+
 const BACKUP_OPERATION_STATE_DIR = '.panel-operations';
 const BACKUP_RESTORE_MARKER_DIR = 'restore-completions';
 const HELPER_INSTANCE_ID = crypto.randomUUID();
@@ -269,6 +278,83 @@ function resolveBackupFilename(label?: string): string {
   return `${timestamp}${safeLabel}.tar.gz`;
 }
 
+async function directoryExists(dirPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(dirPath);
+    return stat.isDirectory();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+async function getSaveLayoutCandidates(config: HelperConfig): Promise<SaveLayout[]> {
+  const modernRootInput = config.hytaleSaveRoot ?? path.join(config.hytaleRoot, 'Server', 'universe');
+  const modernWorldsInput = path.join(modernRootInput, 'worlds');
+  const modernRoot = await guardPath(modernRootInput, config.hytaleRoot);
+  const modernWorlds = await guardPath(modernWorldsInput, config.hytaleRoot);
+  const legacyWorlds = await guardPath(config.worldsPath, config.hytaleRoot);
+
+  return [
+    {
+      kind: 'modern',
+      rootPath: modernRoot,
+      requiredWorldsPath: modernWorlds,
+      archiveRootDir: path.basename(path.resolve(modernRootInput)).replace(/\/+$/, '') || 'universe',
+      extractParent: path.dirname(modernRoot),
+      checkedPath: modernWorlds,
+    },
+    {
+      kind: 'legacy',
+      rootPath: legacyWorlds,
+      requiredWorldsPath: legacyWorlds,
+      archiveRootDir: path.basename(legacyWorlds).replace(/\/+$/, '') || 'worlds',
+      extractParent: path.dirname(legacyWorlds),
+      checkedPath: legacyWorlds,
+    },
+  ];
+}
+
+async function resolveBackupSourceLayout(config: HelperConfig): Promise<
+  | { success: true; layout: SaveLayout; checkedPaths: string[] }
+  | { success: false; error: string; checkedPaths: string[] }
+> {
+  const layouts = await getSaveLayoutCandidates(config);
+  const checkedPaths = layouts.map((layout) => layout.checkedPath);
+
+  for (const layout of layouts) {
+    if (await directoryExists(layout.requiredWorldsPath)) {
+      return { success: true, layout, checkedPaths };
+    }
+  }
+
+  return {
+    success: false,
+    checkedPaths,
+    error: `Save data directory not found. Checked: ${checkedPaths.join(', ')}`,
+  };
+}
+
+async function resolveRestoreLayoutFromEntries(
+  config: HelperConfig,
+  entries: string[]
+): Promise<{ success: true; layout: SaveLayout } | { success: false; error: string }> {
+  const layouts = await getSaveLayoutCandidates(config);
+  for (const layout of layouts) {
+    const validation = validateBackupEntries(entries, layout.archiveRootDir);
+    if (validation.valid) {
+      return { success: true, layout };
+    }
+  }
+
+  const expected = layouts.map((layout) => layout.archiveRootDir).join(' or ');
+  return {
+    success: false,
+    error: `Backup contains unexpected top-level path; expected ${expected}`,
+  };
+}
+
 async function persistTerminalOperationState(
   config: HelperConfig,
   state: BackupOperationState,
@@ -310,18 +396,15 @@ async function validateBackupArchiveForRecovery(
   config: HelperConfig,
   backupFilePath: string
 ): Promise<{ valid: boolean; reason?: string }> {
-  const worldsPath = await guardPath(config.worldsPath, config.hytaleRoot);
-  const expectedRootDir = path.basename(worldsPath).replace(/\/+$/, '') || 'worlds';
-
   const listResult = await safeExec('/usr/bin/tar', ['-tzf', backupFilePath]);
   if (listResult.exitCode !== 0) {
     return { valid: false, reason: 'Archive listing failed during recovery' };
   }
 
   const entries = listResult.stdout.split('\n').filter(Boolean);
-  const entryValidation = validateBackupEntries(entries, expectedRootDir);
-  if (!entryValidation.valid) {
-    return { valid: false, reason: entryValidation.error ?? 'Archive structure invalid during recovery' };
+  const layout = await resolveRestoreLayoutFromEntries(config, entries);
+  if (!layout.success) {
+    return { valid: false, reason: layout.error };
   }
 
   return { valid: true };
@@ -572,7 +655,7 @@ export function validateBackupEntryTypes(verboseEntries: string[]): { valid: boo
 }
 
 /**
- * Create a backup of the Hytale server worlds directory.
+ * Create a backup of the Hytale server save data.
  */
 async function _createBackup(
   config: HelperConfig,
@@ -583,13 +666,11 @@ async function _createBackup(
     await fs.mkdir(config.backupPath, { recursive: true, mode: 0o770 });
 
     const backupFilePath = await guardPath(path.join(config.backupPath, plan.filename), config.backupPath);
-    const worldsPath = await guardPath(config.worldsPath, config.hytaleRoot);
 
     await setRunningState('validating');
-    try {
-      await fs.access(worldsPath);
-    } catch {
-      return { success: false, error: 'Worlds directory not found' };
+    const sourceLayout = await resolveBackupSourceLayout(config);
+    if (!sourceLayout.success) {
+      return { success: false, error: sourceLayout.error };
     }
 
     await setRunningState('archiving');
@@ -597,8 +678,8 @@ async function _createBackup(
       '-czf',
       backupFilePath,
       '-C',
-      path.dirname(worldsPath),
-      path.basename(worldsPath),
+      sourceLayout.layout.extractParent,
+      sourceLayout.layout.archiveRootDir,
     ], { timeout: 300_000 }); // 5 minute timeout for large worlds
 
     if (result.exitCode !== 0) {
@@ -748,18 +829,15 @@ async function _restoreBackup(
       return { success: false, error: 'Backup file not found' };
     }
 
-    const worldsPath = await guardPath(config.worldsPath, config.hytaleRoot);
-    const expectedRootDir = path.basename(worldsPath).replace(/\/+$/, '') || 'worlds';
-
     const listResult = await safeExec('/usr/bin/tar', ['-tzf', backupFilePath]);
     if (listResult.exitCode !== 0) {
       return { success: false, error: 'Backup archive is corrupted or invalid' };
     }
 
     const entries = listResult.stdout.split('\n').filter(Boolean);
-    const entryValidation = validateBackupEntries(entries, expectedRootDir);
-    if (!entryValidation.valid) {
-      return { success: false, error: entryValidation.error };
+    const restoreLayout = await resolveRestoreLayoutFromEntries(config, entries);
+    if (!restoreLayout.success) {
+      return { success: false, error: restoreLayout.error };
     }
 
     const verboseResult = await safeExec('/usr/bin/tar', ['-tvzf', backupFilePath]);
@@ -793,10 +871,12 @@ async function _restoreBackup(
     await setRunningState('extracting', { safetyBackupFilename: safetyBackupName });
 
     try {
-      await fs.rm(worldsPath, { recursive: true, force: true });
+      await fs.rm(restoreLayout.layout.rootPath, { recursive: true, force: true });
     } catch {
       // May not exist
     }
+
+    await fs.mkdir(restoreLayout.layout.extractParent, { recursive: true, mode: 0o770 });
 
     const extractResult = await safeExec('/usr/bin/tar', [
       '-xzf',
@@ -804,7 +884,7 @@ async function _restoreBackup(
       '--no-same-owner',
       '--no-same-permissions',
       '-C',
-      path.dirname(worldsPath),
+      restoreLayout.layout.extractParent,
     ], { timeout: 300_000 });
 
     if (extractResult.exitCode !== 0) {

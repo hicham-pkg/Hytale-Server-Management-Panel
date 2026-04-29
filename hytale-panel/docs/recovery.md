@@ -98,7 +98,7 @@ rm /opt/hytale-backups/<filename>.tar.gz
 
 # 3. Create a fresh backup via the panel or CLI
 sudo -u hytale tar -czf /opt/hytale-backups/recovery-$(date +%Y%m%d).tar.gz \
-  -C /opt/hytale/Server worlds/
+  -C /opt/hytale/Server universe/
 ```
 
 ---
