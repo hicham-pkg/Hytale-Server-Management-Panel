@@ -150,6 +150,33 @@ read_env_value() {
   return 1
 }
 
+read_env_value_allow_empty() {
+  local file="$1"
+  local key="$2"
+  local line value
+
+  if [ ! -r "$file" ]; then
+    return 1
+  fi
+
+  line="$(grep -E "^${key}=" "$file" | tail -n 1 || true)"
+  if [ -z "$line" ]; then
+    return 1
+  fi
+
+  value="${line#*=}"
+  value="${value%$'\r'}"
+  if [ "${value#\"}" != "$value" ] && [ "${value%\"}" != "$value" ]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  elif [ "${value#\'}" != "$value" ] && [ "${value%\'}" != "$value" ]; then
+    value="${value#\'}"
+    value="${value%\'}"
+  fi
+  printf '%s' "$value"
+  return 0
+}
+
 read_env_value_privileged() {
   local file="$1"
   local key="$2"
@@ -196,6 +223,28 @@ resolve_config_value() {
   printf '%s' "$default_value"
 }
 
+normalize_source_subdir() {
+  local subdir="${1-}"
+  if [ -z "$subdir" ] || [ "$subdir" = "." ]; then
+    printf '.'
+    return 0
+  fi
+  case "$subdir" in
+    /*|*\\*|*//*|*/) return 1 ;;
+  esac
+
+  local part
+  local -a parts
+  IFS='/' read -r -a parts <<< "$subdir"
+  for part in "${parts[@]}"; do
+    if [ -z "$part" ] || [ "$part" = "." ] || [ "$part" = ".." ]; then
+      return 1
+    fi
+  done
+
+  printf '%s' "$subdir"
+}
+
 TMUX_SOCKET_PATH="$(resolve_config_value TMUX_SOCKET_PATH /opt/hytale/run/hytale.tmux.sock "$HELPER_ENV_FILE" "$ROOT_ENV_FILE")"
 TMUX_SESSION="$(resolve_config_value TMUX_SESSION hytale "$HELPER_ENV_FILE" "$ROOT_ENV_FILE")"
 API_HOST_PORT="$(resolve_config_value API_HOST_PORT 4000 "$ROOT_ENV_FILE")"
@@ -207,6 +256,12 @@ BANS_PATH="$(resolve_config_value BANS_PATH "$HYTALE_ROOT/Server/bans.json" "$HE
 HYTALE_SAVE_ROOT="$(resolve_config_value HYTALE_SAVE_ROOT "$HYTALE_ROOT/Server/universe" "$HELPER_ENV_FILE")"
 WORLDS_PATH="$(resolve_config_value WORLDS_PATH "$HYTALE_ROOT/Server/worlds" "$HELPER_ENV_FILE")"
 BACKUP_PATH="$(resolve_config_value BACKUP_PATH /opt/hytale-backups "$HELPER_ENV_FILE")"
+PANEL_UPDATE_LIVE_DIR="$(resolve_config_value PANEL_UPDATE_LIVE_DIR "$ROOT_DIR" "$ROOT_ENV_FILE")"
+if PANEL_UPDATE_SOURCE_SUBDIR_RAW="$(read_env_value_allow_empty "$ROOT_ENV_FILE" PANEL_UPDATE_SOURCE_SUBDIR)"; then
+  :
+else
+  PANEL_UPDATE_SOURCE_SUBDIR_RAW="hytale-panel"
+fi
 
 # ─── State flags (used by perform_fixes) ───────────────────
 HELPER_SERVICE_ACTIVE=0
@@ -941,6 +996,18 @@ check_config() {
     ok "Panel updater templated unit installed at $PANEL_UPDATE_TEMPLATED_UNIT"
   else
     fail "Panel updater templated unit missing at $PANEL_UPDATE_TEMPLATED_UNIT" "sudo install -o root -g root -m 0644 systemd/hytale-panel-updater@.service $PANEL_UPDATE_TEMPLATED_UNIT && sudo systemctl daemon-reload"
+  fi
+
+  local normalized_update_subdir
+  if normalized_update_subdir="$(normalize_source_subdir "$PANEL_UPDATE_SOURCE_SUBDIR_RAW")"; then
+    ok "Panel updater source subdir: $normalized_update_subdir"
+  else
+    fail "Invalid PANEL_UPDATE_SOURCE_SUBDIR=$PANEL_UPDATE_SOURCE_SUBDIR_RAW" "set PANEL_UPDATE_SOURCE_SUBDIR=hytale-panel, or . for root-layout release archives"
+  fi
+  if [ -f "$PANEL_UPDATE_LIVE_DIR/docker-compose.yml" ]; then
+    ok "Panel updater live root: $PANEL_UPDATE_LIVE_DIR"
+  else
+    fail "Panel updater live root missing docker-compose.yml ($PANEL_UPDATE_LIVE_DIR)" "set PANEL_UPDATE_LIVE_DIR=$ROOT_DIR in $ROOT_ENV_FILE"
   fi
 
   # Surface latest job status if it failed — non-fatal, just visible.

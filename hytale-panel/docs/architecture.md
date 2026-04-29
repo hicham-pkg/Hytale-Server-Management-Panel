@@ -494,7 +494,7 @@ Backups can be tracked by database UUIDs or discovered as disk-only `.tar.gz` fi
 
 ### Panel Updater Boundary
 
-Panel update jobs are started by the helper and executed by a root-owned systemd runner. The API never downloads or applies update archives directly. Download URLs must point at configured GitHub release/tag archives (`github.com/.../archive/refs/tags/...` or `codeload.github.com/.../refs/tags/...`); branch archives, opaque object URLs, and arbitrary URLs are rejected.
+Panel update jobs are started by the helper and executed by a root-owned systemd runner. The API never downloads or applies update archives directly. Download URLs must point at configured GitHub release/tag archives (`github.com/.../archive/refs/tags/...` or `codeload.github.com/.../refs/tags/...`); branch archives, opaque object URLs, and arbitrary URLs are rejected. The runner validates the configured app subdirectory inside the GitHub source archive (`PANEL_UPDATE_SOURCE_SUBDIR`, default `hytale-panel`) before syncing into the live panel root.
 
 ### Future Hytale Server Update Manager Note
 

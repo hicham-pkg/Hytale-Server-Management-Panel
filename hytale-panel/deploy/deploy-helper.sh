@@ -225,6 +225,10 @@ migrate_helper_env_socket_path() {
   hytale_root="${hytale_root:-/opt/hytale}"
 
   set_env_var "$HELPER_ENV_FILE" HELPER_SOCKET_PATH "$HOST_HELPER_SOCKET_PATH"
+  if [ -f "$ROOT_ENV_FILE" ]; then
+    ensure_env_var_if_missing "$ROOT_ENV_FILE" PANEL_UPDATE_SOURCE_SUBDIR hytale-panel
+    ensure_env_var_if_missing "$ROOT_ENV_FILE" PANEL_UPDATE_LIVE_DIR "$SCRIPT_DIR"
+  fi
   ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SAVE_ROOT "$hytale_root/Server/universe"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" MODS_PATH "$MODS_DIR"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" DISABLED_MODS_PATH "$DISABLED_MODS_DIR"

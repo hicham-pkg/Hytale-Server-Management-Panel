@@ -580,6 +580,13 @@ PANEL_UPDATE_REPO=hicham-pkg/Hytale-Server-Management-Panel
 # Cache TTL for the GitHub fetch. 1–1440 minutes. Default 60.
 PANEL_UPDATE_CACHE_MINUTES=60
 
+# GitHub source archives for this repo contain the app under hytale-panel/.
+# Use "." only for forks whose package.json/docker-compose.yml are at archive root.
+PANEL_UPDATE_SOURCE_SUBDIR=hytale-panel
+
+# Optional. Normally auto-detected by the updater runner.
+# PANEL_UPDATE_LIVE_DIR=/opt/hytale-panel/hytale-panel
+
 # Optional. Required only if PANEL_UPDATE_REPO is private. Use a fine-grained
 # PAT scoped to "Contents: Read-only" on the panel repo. NEVER returned to
 # the browser; sent only on the outbound GitHub request.
@@ -623,7 +630,8 @@ version. Recommended pattern in `deploy/update-panel.sh` or your CI:
 
 ```bash
 PANEL_BUILD_COMMIT=$(git -C /opt/hytale-panel rev-parse --short HEAD)
-# write or update PANEL_BUILD_COMMIT in /opt/hytale-panel/.env, then:
+# write or update PANEL_BUILD_COMMIT in /opt/hytale-panel/hytale-panel/.env, then:
+cd /opt/hytale-panel/hytale-panel
 docker compose up -d --force-recreate api
 ```
 
@@ -645,6 +653,23 @@ may show as "unable to check" or may not appear as the latest release. Private
 repos need `GITHUB_UPDATE_TOKEN` with read access. Drafts and prereleases are
 surfaced via the `prerelease` flag but still flagged as "update available" if
 they sort higher than the current version.
+
+### Nested GitHub source archives
+
+The public repository has a wrapper layout:
+
+```text
+repo root/
+  hytale-panel/
+    package.json
+    docker-compose.yml
+    packages/
+```
+
+GitHub source archives preserve that wrapper directory, so the updater validates
+and applies files from `PANEL_UPDATE_SOURCE_SUBDIR` inside the extracted archive.
+The default is `hytale-panel`. Set it to `.` only for forks where the panel app
+files are at archive root.
 
 ### Security notes
 

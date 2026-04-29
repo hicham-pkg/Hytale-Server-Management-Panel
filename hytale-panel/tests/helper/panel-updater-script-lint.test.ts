@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 /**
@@ -37,6 +38,67 @@ function scriptAllowsDownloadUrl(url: string, repo = UPDATE_REPO): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function runUpdaterLib(command: string, extraEnv: Record<string, string> = {}): string {
+  return execFileSync('bash', ['-lc', 'source "$RUNNER_PATH"; ' + command], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HYTALE_PANEL_UPDATER_LIB_ONLY: '1',
+      RUNNER_PATH,
+      ...extraEnv,
+    },
+  });
+}
+
+function resolveAppRoot(archiveRoot: string, sourceSubdir: string): string {
+  return runUpdaterLib(
+    'resolve_app_source_root "$ARCHIVE_ROOT" "$SOURCE_SUBDIR"',
+    {
+      ARCHIVE_ROOT: archiveRoot,
+      SOURCE_SUBDIR: sourceSubdir,
+    },
+  );
+}
+
+function validateRequiredAppPaths(appRoot: string): string {
+  return runUpdaterLib('validate_required_app_paths "$APP_ROOT"', {
+    APP_ROOT: appRoot,
+  });
+}
+
+function getMissingRequiredAppPath(appRoot: string): string {
+  try {
+    validateRequiredAppPaths(appRoot);
+    return '';
+  } catch (error) {
+    const execError = error as { stdout?: Buffer | string };
+    return Buffer.isBuffer(execError.stdout)
+      ? execError.stdout.toString('utf8')
+      : String(execError.stdout ?? '');
+  }
+}
+
+function createPanelApp(root: string, options: { omit?: string[] } = {}) {
+  const omit = new Set(options.omit ?? []);
+  const files = [
+    'package.json',
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+    'docker-compose.yml',
+    'packages/api/package.json',
+    'packages/web/package.json',
+    'packages/helper/package.json',
+    'scripts/doctor.sh',
+    'deploy/deploy-helper.sh',
+  ];
+  for (const rel of files) {
+    if (omit.has(rel)) continue;
+    const target = path.join(root, rel);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, rel.endsWith('.sh') ? '#!/usr/bin/env bash\n' : '{}\n');
   }
 }
 
@@ -188,10 +250,11 @@ describe('hytale-panel-updater (runner script)', () => {
       'pnpm-lock.yaml',
       'pnpm-workspace.yaml',
       'docker-compose.yml',
-      'packages',
-      'deploy',
-      'scripts',
-      'systemd',
+      'packages/api/package.json',
+      'packages/web/package.json',
+      'packages/helper/package.json',
+      'scripts/doctor.sh',
+      'deploy/deploy-helper.sh',
     ]) {
       expect(src).toContain(`"${required}"`);
     }
@@ -201,6 +264,10 @@ describe('hytale-panel-updater (runner script)', () => {
     // Apply step
     expect(src).toMatch(/--exclude='\.env'/);
     expect(src).toMatch(/--exclude='helper\/\.env'/);
+    expect(src).toMatch(/--exclude='run'/);
+    expect(src).toMatch(/--exclude='node_modules'/);
+    expect(src).toMatch(/--exclude='\.next'/);
+    expect(src).toMatch(/--exclude='dist'/);
   });
 
   it('caps download size and uses HTTPS-only download flags', () => {
@@ -214,6 +281,80 @@ describe('hytale-panel-updater (runner script)', () => {
     // We pass the URL as the last positional in the args ARRAY, not concatenated.
     expect(src).toMatch(/curl_args\+=\("\$url"\)/);
     expect(src).not.toMatch(/curl .*\$\{url\}.*\$\{token\}/);
+  });
+
+  it('applies from the validated app root recorded in .src-path', () => {
+    expect(src).toContain('src="$(resolve_app_source_root "$archive_root" "$PANEL_UPDATE_SOURCE_SUBDIR")"');
+    expect(src).toContain('echo "$src" >"${JOB_DIR}/.src-path"');
+    expect(src).toContain('src="$(cat "${JOB_DIR}/.src-path")"');
+    expect(src).toContain('"${src}/" "${PANEL_DIR}/"');
+  });
+});
+
+describe('panel updater source subdir validation', () => {
+  it('accepts root-layout archives when PANEL_UPDATE_SOURCE_SUBDIR=.', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-updater-root-layout-'));
+    const archiveRoot = path.join(tmp, 'repo-v1.2.5');
+    fs.mkdirSync(archiveRoot, { recursive: true });
+    createPanelApp(archiveRoot);
+
+    expect(resolveAppRoot(archiveRoot, '.')).toBe(fs.realpathSync(archiveRoot));
+    expect(validateRequiredAppPaths(archiveRoot)).toBe('');
+  });
+
+  it('treats an empty PANEL_UPDATE_SOURCE_SUBDIR as a root-layout archive', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-updater-empty-layout-'));
+    const archiveRoot = path.join(tmp, 'repo-v1.2.5');
+    fs.mkdirSync(archiveRoot, { recursive: true });
+    createPanelApp(archiveRoot);
+
+    expect(resolveAppRoot(archiveRoot, '')).toBe(fs.realpathSync(archiveRoot));
+    expect(validateRequiredAppPaths(archiveRoot)).toBe('');
+  });
+
+  it('accepts nested hytale-panel archives when PANEL_UPDATE_SOURCE_SUBDIR=hytale-panel', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-updater-nested-layout-'));
+    const archiveRoot = path.join(tmp, 'repo-v1.2.5');
+    const appRoot = path.join(archiveRoot, 'hytale-panel');
+    fs.mkdirSync(appRoot, { recursive: true });
+    createPanelApp(appRoot);
+
+    expect(resolveAppRoot(archiveRoot, 'hytale-panel')).toBe(fs.realpathSync(appRoot));
+    expect(validateRequiredAppPaths(appRoot)).toBe('');
+  });
+
+  it('reports missing required paths inside the configured app subdir', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-updater-missing-app-file-'));
+    const archiveRoot = path.join(tmp, 'repo-v1.2.5');
+    const appRoot = path.join(archiveRoot, 'hytale-panel');
+    fs.mkdirSync(appRoot, { recursive: true });
+    createPanelApp(appRoot, { omit: ['package.json'] });
+
+    expect(resolveAppRoot(archiveRoot, 'hytale-panel')).toBe(fs.realpathSync(appRoot));
+    expect(getMissingRequiredAppPath(appRoot)).toBe('package.json');
+  });
+
+  it.each([
+    ['../x', 'traversal'],
+    ['/tmp/panel', 'absolute path'],
+    ['hytale-panel//nested', 'empty path component'],
+  ])('rejects unsafe source subdir %s (%s)', (sourceSubdir) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-updater-bad-subdir-'));
+    const archiveRoot = path.join(tmp, 'repo-v1.2.5');
+    fs.mkdirSync(archiveRoot, { recursive: true });
+
+    expect(() => resolveAppRoot(archiveRoot, sourceSubdir)).toThrow();
+  });
+
+  it('rejects source subdir symlinks that escape the extracted archive', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-updater-symlink-'));
+    const archiveRoot = path.join(tmp, 'repo-v1.2.5');
+    const outside = path.join(tmp, 'outside');
+    fs.mkdirSync(archiveRoot, { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, path.join(archiveRoot, 'hytale-panel'));
+
+    expect(() => resolveAppRoot(archiveRoot, 'hytale-panel')).toThrow();
   });
 });
 

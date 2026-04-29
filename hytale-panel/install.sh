@@ -961,6 +961,8 @@ fi
 
 set_env_var "$PANEL_DIR/.env" PANEL_SOCKET_GID "$PANEL_SOCKET_GID"
 ensure_env_var_if_missing "$PANEL_DIR/.env" MAX_MOD_UPLOAD_SIZE_MB 150
+ensure_env_var_if_missing "$PANEL_DIR/.env" PANEL_UPDATE_SOURCE_SUBDIR hytale-panel
+ensure_env_var_if_missing "$PANEL_DIR/.env" PANEL_UPDATE_LIVE_DIR "$PANEL_DIR"
 
 # Lock down panel .env — contains SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD.
 # Install-time umask may leave it 0644 (world-readable); force 0600 so local users on the host

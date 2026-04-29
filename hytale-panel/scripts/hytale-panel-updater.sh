@@ -31,7 +31,12 @@
 set -uo pipefail
 
 # ─── Constants ────────────────────────────────────────────────
-PANEL_DIR="/opt/hytale-panel"
+PANEL_BASE_DIR="/opt/hytale-panel"
+if [ -f "${PANEL_BASE_DIR}/hytale-panel/docker-compose.yml" ]; then
+  PANEL_DIR="${PANEL_BASE_DIR}/hytale-panel"
+else
+  PANEL_DIR="$PANEL_BASE_DIR"
+fi
 PANEL_DATA_DIR="/opt/hytale-panel-data"
 BACKUP_DIR_ROOT="/opt/hytale-panel-backups"
 JOBS_DIR="${PANEL_DATA_DIR}/update-jobs"
@@ -199,6 +204,97 @@ format_curl_download_error() {
   fi
 }
 
+refresh_panel_paths() {
+  HELPER_DEPLOY_SCRIPT="${PANEL_DIR}/deploy/deploy-helper.sh"
+  PANEL_ENV="${PANEL_DIR}/.env"
+}
+
+detect_panel_dir() {
+  if [ -n "${PANEL_UPDATE_LIVE_DIR:-}" ]; then
+    PANEL_DIR="$PANEL_UPDATE_LIVE_DIR"
+  elif [ -f "${PANEL_BASE_DIR}/hytale-panel/docker-compose.yml" ]; then
+    PANEL_DIR="${PANEL_BASE_DIR}/hytale-panel"
+  else
+    PANEL_DIR="$PANEL_BASE_DIR"
+  fi
+  refresh_panel_paths
+}
+
+normalize_source_subdir() {
+  local subdir="${1-}"
+  if [ -z "$subdir" ] || [ "$subdir" = "." ]; then
+    printf '.'
+    return 0
+  fi
+  case "$subdir" in
+    /*|*\\*|*//*|*/) return 1 ;;
+  esac
+
+  local part
+  local -a parts
+  IFS='/' read -r -a parts <<< "$subdir"
+  for part in "${parts[@]}"; do
+    if [ -z "$part" ] || [ "$part" = "." ] || [ "$part" = ".." ]; then
+      return 1
+    fi
+  done
+
+  printf '%s' "$subdir"
+}
+
+resolve_app_source_root() {
+  local archive_root="$1"
+  local source_subdir="$2"
+  local normalized root_real candidate app_real
+
+  normalized="$(normalize_source_subdir "$source_subdir")" || return 2
+  root_real="$(realpath "$archive_root" 2>/dev/null)" || return 3
+  if [ "$normalized" = "." ]; then
+    candidate="$archive_root"
+  else
+    candidate="${archive_root}/${normalized}"
+  fi
+  [ -d "$candidate" ] || return 4
+  app_real="$(realpath "$candidate" 2>/dev/null)" || return 5
+
+  case "$app_real" in
+    "$root_real"|"$root_real"/*)
+      printf '%s' "$app_real"
+      return 0
+      ;;
+    *)
+      return 6
+      ;;
+  esac
+}
+
+required_app_paths() {
+  printf '%s\n' \
+    "package.json" \
+    "pnpm-lock.yaml" \
+    "pnpm-workspace.yaml" \
+    "docker-compose.yml" \
+    "packages/api/package.json" \
+    "packages/web/package.json" \
+    "packages/helper/package.json" \
+    "scripts/doctor.sh" \
+    "deploy/deploy-helper.sh"
+}
+
+validate_required_app_paths() {
+  local app_root="$1"
+  local required
+  while IFS= read -r required; do
+    if [ ! -e "${app_root}/${required}" ]; then
+      printf '%s' "$required"
+      return 1
+    fi
+  done < <(required_app_paths)
+  return 0
+}
+
+detect_panel_dir
+
 # ─── Step implementations ─────────────────────────────────────
 
 read_spec() {
@@ -213,13 +309,39 @@ read_spec() {
   esac
 }
 
-# Source /opt/hytale-panel/.env for retention/limit/token at job time. We do
+# Source the live panel .env for retention/limit/token at job time. We do
 # this AFTER spec validation so a malformed spec can't influence the env.
 load_panel_env() {
+  local initial_env="$PANEL_ENV"
+
   if [ -r "$PANEL_ENV" ]; then
     # shellcheck disable=SC1090
     set -a; . "$PANEL_ENV"; set +a
   fi
+
+  detect_panel_dir
+  if [ "$PANEL_ENV" != "$initial_env" ] && [ -r "$PANEL_ENV" ]; then
+    # shellcheck disable=SC1090
+    set -a; . "$PANEL_ENV"; set +a
+    detect_panel_dir
+  fi
+
+  case "$PANEL_DIR" in
+    /*) ;;
+    *) mark_failed 0 "config" "PANEL_UPDATE_LIVE_DIR must be an absolute path" ;;
+  esac
+  if [ ! -f "${PANEL_DIR}/docker-compose.yml" ]; then
+    mark_failed 0 "config" "live panel root is missing docker-compose.yml: $PANEL_DIR"
+  fi
+
+  if [ -z "${PANEL_UPDATE_SOURCE_SUBDIR+x}" ]; then
+    PANEL_UPDATE_SOURCE_SUBDIR="hytale-panel"
+  fi
+  PANEL_UPDATE_SOURCE_SUBDIR="$(normalize_source_subdir "$PANEL_UPDATE_SOURCE_SUBDIR")" || \
+    mark_failed 0 "config" "PANEL_UPDATE_SOURCE_SUBDIR must be a relative safe path or ."
+
+  log "using live panel root: $PANEL_DIR"
+  log "using release source subdir: $PANEL_UPDATE_SOURCE_SUBDIR"
 }
 
 # Step 1 — download
@@ -372,32 +494,30 @@ do_validate() {
     fi
   done < <(find "$extract_dir" -mindepth 1 -print0)
 
-  # Find the extracted source root — GitHub tarballs nest it one level deep.
+  # Find the extracted repository root — GitHub tarballs nest it one level deep.
   local roots
   roots=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
   if [ "$roots" != "1" ]; then
     mark_failed 2 "validating" "expected exactly one top-level directory in archive, got $roots"
   fi
-  local src
-  src="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  local archive_root src missing_required display_missing
+  archive_root="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if ! src="$(resolve_app_source_root "$archive_root" "$PANEL_UPDATE_SOURCE_SUBDIR")"; then
+    if [ "$PANEL_UPDATE_SOURCE_SUBDIR" = "." ]; then
+      mark_failed 2 "validating" "release archive app root is invalid"
+    fi
+    mark_failed 2 "validating" "release archive missing app root: $PANEL_UPDATE_SOURCE_SUBDIR"
+  fi
   echo "$src" >"${JOB_DIR}/.src-path"
 
   # Required files — if any are missing the archive isn't a valid panel release.
-  local required=(
-    "package.json"
-    "pnpm-lock.yaml"
-    "pnpm-workspace.yaml"
-    "docker-compose.yml"
-    "packages"
-    "deploy"
-    "scripts"
-    "systemd"
-  )
-  for r in "${required[@]}"; do
-    if [ ! -e "${src}/${r}" ]; then
-      mark_failed 2 "validating" "release archive missing required path: $r"
+  if ! missing_required="$(validate_required_app_paths "$src")"; then
+    display_missing="$missing_required"
+    if [ "$PANEL_UPDATE_SOURCE_SUBDIR" != "." ]; then
+      display_missing="${PANEL_UPDATE_SOURCE_SUBDIR}/${missing_required}"
     fi
-  done
+    mark_failed 2 "validating" "release archive missing required path: $display_missing"
+  fi
 
   # Confirm tag matches what the helper said it was downloading.
   local target_tag pkg_version
