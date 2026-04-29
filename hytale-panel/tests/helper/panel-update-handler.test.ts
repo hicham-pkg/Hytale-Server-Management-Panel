@@ -76,16 +76,6 @@ afterEach(() => {
 });
 
 describe('isAllowedDownloadUrl', () => {
-  it('accepts api.github.com /repos/{repo}/...', async () => {
-    const { isAllowedDownloadUrl } = await loadHandler();
-    expect(
-      isAllowedDownloadUrl(
-        'https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/tarball/v1.2.0',
-        'hicham-pkg/Hytale-Server-Management-Panel',
-      ),
-    ).toBe(true);
-  });
-
   it('accepts github.com /{repo}/archive/...', async () => {
     const { isAllowedDownloadUrl } = await loadHandler();
     expect(
@@ -109,6 +99,7 @@ describe('isAllowedDownloadUrl', () => {
   it.each([
     ['http://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/tarball/v1.2.0', 'http not https'],
     ['https://evil.example.com/hicham-pkg/Hytale-Server-Management-Panel/archive/v1.2.0.tar.gz', 'foreign host'],
+    ['https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/tarball/v1.2.0', 'GitHub API archive endpoint'],
     ['https://api.github.com/repos/attacker/Hytale-Server-Management-Panel/tarball/v1.2.0', 'foreign owner'],
     ['https://github.com/hicham-pkg/evil-repo/archive/v1.2.0.tar.gz', 'foreign repo name'],
     ['https://github.com/hicham-pkg/Hytale-Server-Management-Panel-evil/archive/v1.2.0.tar.gz', 'suffix-injected repo name'],
@@ -120,6 +111,7 @@ describe('isAllowedDownloadUrl', () => {
     ['https://github.com/hicham-pkg/Hytale-Server-Management-Panel/archive/main.tar.gz', 'branch tarball via /archive/<branch>'],
     ['https://codeload.github.com/hicham-pkg/Hytale-Server-Management-Panel/tar.gz/refs/heads/main', 'branch tarball via codeload heads'],
     ['https://codeload.github.com/hicham-pkg/Hytale-Server-Management-Panel/legacy.tar.gz/main', 'branch tarball via codeload legacy'],
+    ['https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/tarball/main', 'branch tarball via API archive endpoint'],
     ['https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/git/refs/heads/main', 'branch ref via api'],
     ['https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/contents/install.sh', 'arbitrary api endpoint'],
     ['https://objects.githubusercontent.com/github-production-release-asset-2e65be/anything', 'opaque GitHub object CDN URL'],
@@ -133,7 +125,7 @@ describe('panelUpdateStart', () => {
   const validParams = {
     targetTag: 'v1.2.0',
     downloadUrl:
-      'https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/tarball/v1.2.0',
+      'https://codeload.github.com/hicham-pkg/Hytale-Server-Management-Panel/tar.gz/refs/tags/v1.2.0',
     tarballType: 'tar.gz' as const,
     expectedSha256: null,
     currentVersion: '1.1.0',

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -64,8 +65,8 @@ describe('hytale-panel-updater (runner script)', () => {
   it('rejects download URLs outside the configured GitHub repo allowlist', () => {
     // Function exists and the case statement enumerates allowed hosts.
     expect(src).toMatch(/validate_download_url\(\)/);
-    expect(src).toMatch(/api\.github\.com\/repos\/\$\{repo\}\//);
     expect(src).toMatch(/codeload\.github\.com\/\$\{repo\}\//);
+    expect(src).not.toMatch(/api\.github\.com\/repos\/\$\{repo\}\//);
   });
 
   it('uses an exclusive flock-backed lock file and aborts if held', () => {
@@ -117,6 +118,30 @@ describe('hytale-panel-updater (runner script)', () => {
     }
   });
 
+  it('preserves curl exit status instead of reading the negated ! status', () => {
+    expect(src).not.toMatch(/if\s+!\s+curl/);
+    expect(src).toMatch(/curl "\$\{curl_args\[@\]\}" >"\$http_code_file" 2>>"\$LOG_FILE"/);
+    expect(src).toMatch(/local curl_exit=\$\?/);
+    expect(src).toMatch(/format_curl_download_error "\$curl_exit" "\$http_code"/);
+    expect(src).not.toMatch(/curl failed \(exit \$\?\)/);
+  });
+
+  it('formats curl HTTP failures with the real HTTP status code', () => {
+    const output = execFileSync('bash', [
+      '-lc',
+      `HYTALE_PANEL_UPDATER_LIB_ONLY=1; source ${JSON.stringify(RUNNER_PATH)}; format_curl_download_error 22 415`,
+    ], { encoding: 'utf8' });
+    expect(output).toBe('Download failed: GitHub returned HTTP 415');
+  });
+
+  it('formats non-HTTP curl failures with the real curl exit code', () => {
+    const output = execFileSync('bash', [
+      '-lc',
+      `HYTALE_PANEL_UPDATER_LIB_ONLY=1; source ${JSON.stringify(RUNNER_PATH)}; format_curl_download_error 6 000`,
+    ], { encoding: 'utf8' });
+    expect(output).toBe('Download failed: curl exit 6');
+  });
+
   it('rejects branch download URLs at the runner-script allowlist layer', () => {
     // The case statement must reject /refs/heads/ paths and /archive/<branch>.
     // We assert the positive matches require /refs/tags/ explicitly.
@@ -128,6 +153,10 @@ describe('hytale-panel-updater (runner script)', () => {
 
   it('rejects direct opaque GitHub object CDN URLs in V2', () => {
     expect(src).not.toMatch(/objects\.githubusercontent\.com\/\*/);
+  });
+
+  it('reports non-archive downloads clearly during validation', () => {
+    expect(src).toMatch(/Downloaded response was not a valid archive/);
   });
 
   it('requires a known set of project files in the staged source', () => {

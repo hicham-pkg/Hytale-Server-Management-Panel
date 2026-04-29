@@ -455,22 +455,22 @@ export default function DashboardPage() {
                     </span>
                   </div>
                   {updateStatus.checkStatus === 'ok' && updateStatus.updateAvailable && !updateJob && (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                      <p className="font-medium">One-click update is available.</p>
+                    <div className="rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+                      <p className="font-medium text-slate-100">Update available: {updateStatus.latestVersion}</p>
                       <p className="mt-1">
-                        This rebuilds the API and Web containers and restarts the host helper service.
-                        The Hytale game server is <strong>not</strong> restarted unless the helper redeploy requires it.
-                        A backup is taken before any files change; rollback is available if anything fails.
+                        This will update the panel, rebuild API/Web, and restart the panel helper.
                       </p>
-                      <p className="mt-1 text-[11px] italic text-amber-800">
-                        Integrity is enforced by GitHub&apos;s HTTPS chain only.
-                        SHA256 release-asset pinning is not active yet — verify the maintainer
-                        you trust controls <span className="font-mono">{updateStatus.releaseUrl?.split('/').slice(2, 5).join('/') ?? 'github.com'}</span>.
+                      <p className="mt-1">Your Hytale game server is not restarted by panel updates.</p>
+                      <p className="mt-1">
+                        A backup is created before files are changed; rollback is available if the update fails.
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        Downloaded from the configured GitHub Release. SHA256 asset pinning is not enabled yet.
                       </p>
                       <div className="mt-2 flex gap-2">
                         <ConfirmDialog
                           title="Update Panel"
-                          description={`This will install ${updateStatus.latestVersion ?? 'the latest release'} from GitHub. The panel will be briefly unavailable during the rebuild. A backup is created before applying.`}
+                          description={`Install ${updateStatus.latestVersion ?? 'the latest release'} from the configured GitHub Release. The panel will rebuild and restart; your Hytale game server will not be restarted.`}
                           confirmLabel="Update Panel"
                           onConfirm={startPanelUpdate}
                         >
@@ -483,8 +483,8 @@ export default function DashboardPage() {
                         <p
                           className={
                             updateActionFeedback.type === 'success'
-                              ? 'mt-2 text-xs text-emerald-800'
-                              : 'mt-2 text-xs text-red-800'
+                              ? 'mt-2 text-xs text-emerald-300'
+                              : 'mt-2 text-xs text-red-300'
                           }
                         >
                           {updateActionFeedback.message}
@@ -494,9 +494,13 @@ export default function DashboardPage() {
                   )}
 
                   {updateJob && (
-                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                    <div className={
+                      updateJob.status === 'failed'
+                        ? 'rounded-md border border-red-900/60 bg-slate-950/60 px-3 py-2 text-xs text-slate-300'
+                        : 'rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs text-slate-300'
+                    }>
                       <div className="flex items-center justify-between">
-                        <span className="font-medium text-slate-900">
+                        <span className="font-medium text-slate-100">
                           {updateJob.kind === 'rollback' ? 'Rolling back' : 'Updating panel'}
                           {updateJob.targetTag ? ` → ${updateJob.targetTag}` : ''}
                         </span>
@@ -514,12 +518,14 @@ export default function DashboardPage() {
                             : updateJob.status}
                         </span>
                       </div>
-                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800">
                         <div
                           className={
                             updateJob.status === 'failed'
                               ? 'h-1.5 rounded-full bg-red-500 transition-all'
-                              : 'h-1.5 rounded-full bg-blue-500 transition-all'
+                              : updateJob.status === 'success'
+                                ? 'h-1.5 rounded-full bg-emerald-500 transition-all'
+                                : 'h-1.5 rounded-full bg-blue-500 transition-all'
                           }
                           style={{
                             width: `${Math.min(
@@ -530,12 +536,12 @@ export default function DashboardPage() {
                         />
                       </div>
                       {updateJob.error && (
-                        <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-red-900">
+                        <p className="mt-2 rounded border border-red-900/60 bg-red-950/40 px-2 py-1 text-red-200">
                           {updateJob.error}
                         </p>
                       )}
                       {updateLogs && (
-                        <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded border border-slate-200 bg-slate-900 p-2 text-[11px] leading-tight text-slate-100">
+                        <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-black/40 p-2 text-[11px] leading-tight text-slate-200">
                           {updateLogs.slice(-8000)}
                         </pre>
                       )}
@@ -543,7 +549,7 @@ export default function DashboardPage() {
                         <div className="mt-2 flex gap-2">
                           <ConfirmDialog
                             title="Roll back panel"
-                            description="This restores the most recent backup and recreates the containers. Any changes made since the failed update will be reverted. Continue?"
+                            description="Restore the most recent panel backup and recreate the containers. Use this if the update failed or the panel is unhealthy."
                             confirmLabel="Roll back"
                             variant="destructive"
                             onConfirm={startRollback}

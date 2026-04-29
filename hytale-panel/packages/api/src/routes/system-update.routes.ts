@@ -114,12 +114,12 @@ export async function systemUpdateRoutes(fastify: FastifyInstance): Promise<void
         });
       }
 
-      // Always download the GitHub-source tarball for the resolved tag.
-      // Release-asset URLs would be preferred but require the maintainer to
-      // attach a binary; the source archive is always available.
+      // Always download the GitHub source tarball for the resolved release tag.
+      // Use codeload directly instead of the GitHub API archive endpoint: the
+      // runner expects a tar.gz body, not API JSON/content negotiation.
       const repo = config.panelUpdateRepo;
       const tag = encodeURIComponent(fresh.latestTag);
-      const downloadUrl = `https://api.github.com/repos/${repo}/tarball/${tag}`;
+      const downloadUrl = `https://codeload.github.com/${repo}/tar.gz/refs/tags/${tag}`;
 
       const result = await panelUpdate.startPanelUpdate({
         targetTag: fresh.latestTag,

@@ -538,8 +538,8 @@ remains as a manual fallback.
 ### Update download trust model
 
 V2 always downloads the **GitHub source tarball** for the resolved release
-tag — `https://api.github.com/repos/{repo}/tarball/{tag}` — never a branch,
-never `main`, never an arbitrary URL. The release tag itself comes from
+tag via codeload — `https://codeload.github.com/{repo}/tar.gz/refs/tags/{tag}`
+— never a branch, never `main`, never an arbitrary URL. The release tag itself comes from
 `/releases/latest` on the configured repo and is consumed only by the
 admin-gated `POST /api/system/updates/start` route, which re-fetches the
 latest release inside the trust boundary before kicking the job (so a

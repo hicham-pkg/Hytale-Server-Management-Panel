@@ -66,11 +66,7 @@ export interface PanelUpdateCancelResult {
  * git-pull flow.
  *
  * Accepted endpoints:
- *   https://api.github.com/repos/{repo}/tarball/<tag>
- *   https://api.github.com/repos/{repo}/zipball/<tag>
- *   https://api.github.com/repos/{repo}/releases/...        (assets list)
  *   https://github.com/{repo}/archive/refs/tags/<tag>.{tar.gz,zip}
- *   https://github.com/{repo}/releases/download/<tag>/...   (release assets)
  *   https://codeload.github.com/{repo}/{tar.gz,zip}/refs/tags/<tag>
  *
  * Rejected examples:
@@ -89,21 +85,9 @@ export function isAllowedDownloadUrl(url: string, repo: string): boolean {
 
   const path = parsed.pathname;
   switch (parsed.host) {
-    case 'api.github.com':
-      // Allow tarball/zipball/releases endpoints scoped to the configured repo.
-      // Reject anything else under /repos/{repo}/ so e.g. /git/refs/heads/main
-      // can't be used to pull a branch via the API.
-      return (
-        path.startsWith(`/repos/${repo}/tarball/`) ||
-        path.startsWith(`/repos/${repo}/zipball/`) ||
-        path.startsWith(`/repos/${repo}/releases/`)
-      );
     case 'github.com':
       // /archive/ must be /archive/refs/tags/... — explicitly disallow heads.
-      return (
-        path.startsWith(`/${repo}/archive/refs/tags/`) ||
-        path.startsWith(`/${repo}/releases/download/`)
-      );
+      return path.startsWith(`/${repo}/archive/refs/tags/`);
     case 'codeload.github.com':
       // codeload paths look like /{repo}/tar.gz/refs/tags/<tag>
       return (

@@ -183,7 +183,7 @@ describe('POST /api/system/updates/start', () => {
     expect(call.targetTag).toBe('v1.2.0');
     expect(call.tarballType).toBe('tar.gz');
     expect(call.downloadUrl).toMatch(
-      /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/tarball\/v1\.2\.0$/,
+      /^https:\/\/codeload\.github\.com\/[^/]+\/[^/]+\/tar\.gz\/refs\/tags\/v1\.2\.0$/,
     );
     expect(auditMock.logAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'panel.update_start', success: true }),

@@ -182,15 +182,21 @@ release_lock() {
 validate_download_url() {
   local url="$1" repo="$2"
   case "$url" in
-    https://api.github.com/repos/${repo}/tarball/*       ) return 0 ;;
-    https://api.github.com/repos/${repo}/zipball/*       ) return 0 ;;
-    https://api.github.com/repos/${repo}/releases/*       ) return 0 ;;
     https://github.com/${repo}/archive/refs/tags/*       ) return 0 ;;
-    https://github.com/${repo}/releases/download/*       ) return 0 ;;
     https://codeload.github.com/${repo}/tar.gz/refs/tags/*) return 0 ;;
     https://codeload.github.com/${repo}/zip/refs/tags/*  ) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+format_curl_download_error() {
+  local exit_code="$1"
+  local http_code="${2:-}"
+  if [ "$exit_code" = "22" ] && [[ "$http_code" =~ ^[0-9]{3}$ ]] && [ "$http_code" != "000" ]; then
+    printf 'Download failed: GitHub returned HTTP %s' "$http_code"
+  else
+    printf 'Download failed: curl exit %s' "$exit_code"
+  fi
 }
 
 # ─── Step implementations ─────────────────────────────────────
@@ -233,10 +239,12 @@ do_download() {
   local archive
   archive="${STAGING_DIR}/release.${tarball_type}"
   local max_bytes=$((PANEL_UPDATE_MAX_DOWNLOAD_MB * 1024 * 1024))
+  local http_code_file="${JOB_DIR}/.curl-http-code"
 
   local curl_args=(--silent --show-error --fail --location
     --max-time 300
     --max-filesize "$max_bytes"
+    --write-out "%{http_code}"
     --user-agent hytale-panel-updater
     --output "$archive")
   if [ -n "$GITHUB_UPDATE_TOKEN" ]; then
@@ -245,9 +253,15 @@ do_download() {
   curl_args+=(--header "Accept: application/octet-stream")
   curl_args+=("$url")
 
-  if ! curl "${curl_args[@]}" >>"$LOG_FILE" 2>&1; then
-    mark_failed 1 "downloading" "curl failed (exit $?). See logs."
+  rm -f "$http_code_file"
+  curl "${curl_args[@]}" >"$http_code_file" 2>>"$LOG_FILE"
+  local curl_exit=$?
+  local http_code
+  http_code="$(tr -dc '0-9' <"$http_code_file" 2>/dev/null | tail -c 3)"
+  if [ "$curl_exit" -ne 0 ]; then
+    mark_failed 1 "downloading" "$(format_curl_download_error "$curl_exit" "$http_code")"
   fi
+  rm -f "$http_code_file"
 
   local size
   size="$(stat -c '%s' "$archive" 2>/dev/null || echo 0)"
@@ -281,8 +295,8 @@ do_validate() {
   local entries
   if [ "$tarball_type" = "tar.gz" ]; then
     # `tar -tzvf` prints type-mode-owner-size-name; we need both name and type.
-    entries="$(tar -tzvf "$archive" 2>/dev/null)" || \
-      mark_failed 2 "validating" "could not list archive entries"
+    entries="$(tar -tzvf "$archive" 2>>"$LOG_FILE")" || \
+      mark_failed 2 "validating" "Downloaded response was not a valid archive"
     while IFS= read -r line; do
       [ -z "$line" ] && continue
       local type_char name
@@ -298,8 +312,8 @@ do_validate() {
       esac
     done <<< "$entries"
   else
-    entries="$(unzip -Z1 "$archive" 2>/dev/null)" || \
-      mark_failed 2 "validating" "could not list archive entries"
+    entries="$(unzip -Z1 "$archive" 2>>"$LOG_FILE")" || \
+      mark_failed 2 "validating" "Downloaded response was not a valid archive"
     while IFS= read -r name; do
       [ -z "$name" ] && continue
       case "$name" in
@@ -652,4 +666,6 @@ main() {
   mark_success
 }
 
-main "$@"
+if [ "${HYTALE_PANEL_UPDATER_LIB_ONLY:-0}" != "1" ]; then
+  main "$@"
+fi
