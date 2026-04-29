@@ -17,7 +17,8 @@ vi.mock('node:child_process', async () => {
     // matches Node's signature and forwards to our mock.
     execFile: (cmd: string, args: string[], opts: unknown, cb?: (err: Error | null, stdout: string, stderr: string) => void) => {
       const callback = typeof opts === 'function' ? (opts as typeof cb) : cb;
-      execMock.fn(cmd, args, opts);
+      const handled = execMock.fn(cmd, args, opts, callback);
+      if (handled === true) return;
       // Default success unless the mock has been preconfigured to throw.
       if (callback) callback(null, '', '');
     },
@@ -212,10 +213,48 @@ describe('panelUpdateStart', () => {
       } else {
         if (cb) cb(null, '', '');
       }
+      return true;
     });
     const second = await panelUpdateStart(makeConfig(), validParams);
     expect(second.success).toBe(false);
     expect(second.error).toMatch(/already running/);
+  });
+
+  it('serializes concurrent start requests before creating duplicate jobs', async () => {
+    const { panelUpdateStart } = await loadHandler();
+    let resolveStartEntered!: () => void;
+    let releaseStart!: () => void;
+    const startEntered = new Promise<void>((resolve) => {
+      resolveStartEntered = resolve;
+    });
+
+    execMock.fn.mockImplementation(
+      (_cmd: string, args: string[], _opts: unknown, cb?: (err: Error | null, stdout: string, stderr: string) => void) => {
+        if (args.includes('start')) {
+          resolveStartEntered();
+          releaseStart = () => cb?.(null, '', '');
+          return true;
+        }
+        cb?.(null, '', '');
+        return true;
+      },
+    );
+
+    const firstPromise = panelUpdateStart(makeConfig(), validParams);
+    await startEntered;
+
+    const second = await panelUpdateStart(makeConfig(), validParams);
+    expect(second.success).toBe(false);
+    expect(second.error).toMatch(/already being queued|already running/);
+
+    releaseStart();
+    const first = await firstPromise;
+    expect(first.success).toBe(true);
+
+    const jobDirs = fs
+      .readdirSync(JOBS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^[0-9a-f-]{36}$/.test(entry.name));
+    expect(jobDirs).toHaveLength(1);
   });
 });
 

@@ -24,4 +24,17 @@ describe('dashboard updater UI copy and theme', () => {
     expect(src).not.toContain('border-slate-200 bg-slate-50');
     expect(src).not.toContain('border-amber-200 bg-amber-50');
   });
+
+  it('clears stale updater logs when the latest job changes or disappears', () => {
+    expect(src).toContain('const updateJobIdRef = useRef<string | null>(null);');
+    expect(src).toContain('if (updateJobIdRef.current !== nextJobId)');
+    expect(src).toContain("setUpdateLogs('');");
+    expect(src).toContain('setUpdateJob(null);');
+  });
+
+  it('fetches terminal job logs and shows an unavailable state on log fetch failure', () => {
+    expect(src).toContain('Fetch log tail for running and terminal jobs');
+    expect(src).toContain('setUpdateLogsUnavailable(true);');
+    expect(src).toContain('Update logs unavailable.');
+  });
 });

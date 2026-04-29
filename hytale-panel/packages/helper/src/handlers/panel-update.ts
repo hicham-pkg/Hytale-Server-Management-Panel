@@ -32,6 +32,9 @@ const TAG_REGEX = /^v?(\d+)\.(\d+)\.(\d+)(?:-[A-Za-z0-9.+-]{1,40})?$/;
 const SHA256_REGEX = /^[a-f0-9]{64}$/i;
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const JOB_CREATION_LOCK_DIR = '.job-create.lock';
+const JOB_CREATION_LOCK_STALE_MS = 5 * 60 * 1000;
+const RUNNING_STATUS_GRACE_MS = 2 * 60 * 1000;
 
 export interface PanelUpdateStartParams {
   targetTag: string;
@@ -105,6 +108,80 @@ function ensureJobDir(jobsDir: string, jobId: string): string {
   return jobDir;
 }
 
+function tryAcquireJobCreationLock(jobsDir: string): (() => void) | null {
+  fs.mkdirSync(jobsDir, { recursive: true, mode: 0o770 });
+  const lockDir = path.join(jobsDir, JOB_CREATION_LOCK_DIR);
+  const acquire = () => {
+    fs.mkdirSync(lockDir, { mode: 0o770 });
+    fs.writeFileSync(
+      path.join(lockDir, 'owner.json'),
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }) + '\n',
+      { mode: 0o660 },
+    );
+  };
+
+  try {
+    acquire();
+  } catch (err) {
+    const nodeErr = err as NodeJS.ErrnoException;
+    if (nodeErr.code !== 'EEXIST') throw err;
+    try {
+      const ageMs = Date.now() - fs.statSync(lockDir).mtimeMs;
+      if (ageMs > JOB_CREATION_LOCK_STALE_MS) {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        acquire();
+      } else {
+        return null;
+      }
+    } catch (retryErr) {
+      const retryNodeErr = retryErr as NodeJS.ErrnoException;
+      if (retryNodeErr.code === 'EEXIST') return null;
+      throw retryErr;
+    }
+  }
+
+  return () => {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  };
+}
+
+function getRunningStatusAgeMs(statusPath: string, parsed: { startedAt?: unknown }): number {
+  if (typeof parsed.startedAt === 'string') {
+    const startedMs = Date.parse(parsed.startedAt);
+    if (Number.isFinite(startedMs)) return Date.now() - startedMs;
+  }
+  return Date.now() - fs.statSync(statusPath).mtimeMs;
+}
+
+function writeFailedToStartStatus(jobDir: string, kind: 'update' | 'rollback', error: string): void {
+  const statusPath = path.join(jobDir, 'status.json');
+  let status: Record<string, unknown> = {};
+  try {
+    status = JSON.parse(fs.readFileSync(statusPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    // Fall through and write the minimal terminal status below.
+  }
+  fs.writeFileSync(
+    statusPath,
+    JSON.stringify(
+      {
+        jobId: status.jobId,
+        kind,
+        step: 0,
+        stepName: 'queued',
+        totalSteps: kind === 'update' ? 8 : 6,
+        status: 'failed',
+        startedAt: status.startedAt ?? new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        error,
+      },
+      null,
+      2,
+    ) + '\n',
+    { mode: 0o660 },
+  );
+}
+
 /**
  * True if any non-terminal status.json exists under the jobs dir. We also
  * sanity-check by asking systemd whether the unit is active for that ID.
@@ -123,8 +200,14 @@ async function isAnyJobRunning(jobsDir: string): Promise<boolean> {
     if (!fs.existsSync(statusPath)) continue;
     try {
       const raw = fs.readFileSync(statusPath, 'utf8');
-      const parsed = JSON.parse(raw) as { status?: string };
+      const parsed = JSON.parse(raw) as { status?: string; startedAt?: unknown };
       if (parsed.status === 'running') {
+        // Newly-created jobs may not be visible as active in systemd yet
+        // because the trigger uses start --no-block. Treat them as running
+        // briefly so concurrent clicks do not create duplicate jobs.
+        if (getRunningStatusAgeMs(statusPath, parsed) < RUNNING_STATUS_GRACE_MS) {
+          return true;
+        }
         // Cross-check with systemd: the job might have been killed without
         // updating status.json (e.g. host crash). If the unit isn't active
         // we treat it as orphaned and let a new job start.
@@ -190,46 +273,55 @@ export async function panelUpdateStart(
     return { success: false, error: 'invalid expectedSha256' };
   }
 
-  if (await isAnyJobRunning(config.panelUpdateJobsDir)) {
-    return { success: false, error: 'Another panel update or rollback job is already running' };
+  const releaseLock = tryAcquireJobCreationLock(config.panelUpdateJobsDir);
+  if (!releaseLock) {
+    return { success: false, error: 'Another panel update or rollback job is already being queued' };
   }
-
-  const jobId = crypto.randomUUID();
-  if (!UUID_V4_REGEX.test(jobId)) {
-    // Defensive: should never happen with crypto.randomUUID() on Node 18+.
-    return { success: false, error: 'failed to generate job id' };
-  }
-  const jobDir = ensureJobDir(config.panelUpdateJobsDir, jobId);
-
-  const spec = {
-    kind: 'update' as const,
-    jobId,
-    targetTag: params.targetTag,
-    downloadUrl: params.downloadUrl,
-    tarballType: params.tarballType,
-    expectedSha256: params.expectedSha256 ?? null,
-    currentVersion: params.currentVersion,
-    createdAt: new Date().toISOString(),
-  };
-  fs.writeFileSync(path.join(jobDir, 'spec.json'), JSON.stringify(spec, null, 2), { mode: 0o660 });
-  // Pre-create empty status/logs so the API's read-only mount can poll
-  // without 404s before the unit's systemd output redirect kicks in.
-  fs.writeFileSync(
-    path.join(jobDir, 'status.json'),
-    JSON.stringify({ jobId, kind: 'update', step: 0, stepName: 'queued', totalSteps: 8, status: 'running', startedAt: spec.createdAt, endedAt: null, error: null }) + '\n',
-    { mode: 0o660 },
-  );
-  fs.writeFileSync(path.join(jobDir, 'logs.txt'), '', { mode: 0o660 });
-
+  let jobDir: string | undefined;
   try {
+    if (await isAnyJobRunning(config.panelUpdateJobsDir)) {
+      return { success: false, error: 'Another panel update or rollback job is already running' };
+    }
+
+    const jobId = crypto.randomUUID();
+    if (!UUID_V4_REGEX.test(jobId)) {
+      // Defensive: should never happen with crypto.randomUUID() on Node 18+.
+      return { success: false, error: 'failed to generate job id' };
+    }
+    jobDir = ensureJobDir(config.panelUpdateJobsDir, jobId);
+
+    const spec = {
+      kind: 'update' as const,
+      jobId,
+      targetTag: params.targetTag,
+      downloadUrl: params.downloadUrl,
+      tarballType: params.tarballType,
+      expectedSha256: params.expectedSha256 ?? null,
+      currentVersion: params.currentVersion,
+      createdAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(jobDir, 'spec.json'), JSON.stringify(spec, null, 2), { mode: 0o660 });
+    // Pre-create empty status/logs so the API's read-only mount can poll
+    // without 404s before the unit's systemd output redirect kicks in.
+    fs.writeFileSync(
+      path.join(jobDir, 'status.json'),
+      JSON.stringify({ jobId, kind: 'update', step: 0, stepName: 'queued', totalSteps: 8, status: 'running', startedAt: spec.createdAt, endedAt: null, error: null }) + '\n',
+      { mode: 0o660 },
+    );
+    fs.writeFileSync(path.join(jobDir, 'logs.txt'), '', { mode: 0o660 });
+
     await startUnit(jobId);
+    return { success: true, jobId };
   } catch (err) {
+    const message = `Failed to start updater unit: ${(err as Error).message.slice(0, 200)}`;
+    if (jobDir) writeFailedToStartStatus(jobDir, 'update', message);
     return {
       success: false,
-      error: `Failed to start updater unit: ${(err as Error).message.slice(0, 200)}`,
+      error: message,
     };
+  } finally {
+    releaseLock();
   }
-  return { success: true, jobId };
 }
 
 /**
@@ -260,35 +352,44 @@ export async function panelUpdateRollback(
     backupPath = resolved;
   }
 
-  if (await isAnyJobRunning(config.panelUpdateJobsDir)) {
-    return { success: false, error: 'Another panel update or rollback job is already running' };
+  const releaseLock = tryAcquireJobCreationLock(config.panelUpdateJobsDir);
+  if (!releaseLock) {
+    return { success: false, error: 'Another panel update or rollback job is already being queued' };
   }
-
-  const jobId = crypto.randomUUID();
-  const jobDir = ensureJobDir(config.panelUpdateJobsDir, jobId);
-  const spec = {
-    kind: 'rollback' as const,
-    jobId,
-    backupPath: backupPath ?? null,
-    createdAt: new Date().toISOString(),
-  };
-  fs.writeFileSync(path.join(jobDir, 'spec.json'), JSON.stringify(spec, null, 2), { mode: 0o660 });
-  fs.writeFileSync(
-    path.join(jobDir, 'status.json'),
-    JSON.stringify({ jobId, kind: 'rollback', step: 0, stepName: 'queued', totalSteps: 6, status: 'running', startedAt: spec.createdAt, endedAt: null, error: null }) + '\n',
-    { mode: 0o660 },
-  );
-  fs.writeFileSync(path.join(jobDir, 'logs.txt'), '', { mode: 0o660 });
-
+  let jobDir: string | undefined;
   try {
+    if (await isAnyJobRunning(config.panelUpdateJobsDir)) {
+      return { success: false, error: 'Another panel update or rollback job is already running' };
+    }
+
+    const jobId = crypto.randomUUID();
+    jobDir = ensureJobDir(config.panelUpdateJobsDir, jobId);
+    const spec = {
+      kind: 'rollback' as const,
+      jobId,
+      backupPath: backupPath ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(jobDir, 'spec.json'), JSON.stringify(spec, null, 2), { mode: 0o660 });
+    fs.writeFileSync(
+      path.join(jobDir, 'status.json'),
+      JSON.stringify({ jobId, kind: 'rollback', step: 0, stepName: 'queued', totalSteps: 6, status: 'running', startedAt: spec.createdAt, endedAt: null, error: null }) + '\n',
+      { mode: 0o660 },
+    );
+    fs.writeFileSync(path.join(jobDir, 'logs.txt'), '', { mode: 0o660 });
+
     await startUnit(jobId);
+    return { success: true, jobId };
   } catch (err) {
+    const message = `Failed to start rollback unit: ${(err as Error).message.slice(0, 200)}`;
+    if (jobDir) writeFailedToStartStatus(jobDir, 'rollback', message);
     return {
       success: false,
-      error: `Failed to start rollback unit: ${(err as Error).message.slice(0, 200)}`,
+      error: message,
     };
+  } finally {
+    releaseLock();
   }
-  return { success: true, jobId };
 }
 
 /**

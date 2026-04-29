@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -76,8 +76,10 @@ export default function DashboardPage() {
   // and survives full page refresh (state is on disk, not in memory).
   const [updateJob, setUpdateJob] = useState<PanelUpdateJob | null>(null);
   const [updateLogs, setUpdateLogs] = useState('');
+  const [updateLogsUnavailable, setUpdateLogsUnavailable] = useState(false);
   const [updateActionFeedback, setUpdateActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [updateActionLoading, setUpdateActionLoading] = useState<'install' | 'rollback' | null>(null);
+  const updateJobIdRef = useRef<string | null>(null);
 
   const loadUpdateStatus = async (force: boolean) => {
     setUpdateChecking(true);
@@ -124,7 +126,13 @@ export default function DashboardPage() {
   // Poll the latest update/rollback job whenever an admin is on the page.
   // Faster cadence while a job is running; fetches the log tail too.
   useEffect(() => {
-    if (user?.role !== 'admin') return undefined;
+    if (user?.role !== 'admin') {
+      updateJobIdRef.current = null;
+      setUpdateJob(null);
+      setUpdateLogs('');
+      setUpdateLogsUnavailable(false);
+      return undefined;
+    }
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -133,14 +141,30 @@ export default function DashboardPage() {
       if (cancelled) return;
       if (res.success) {
         const job = res.data ?? null;
+        const nextJobId = job?.jobId ?? null;
+        if (updateJobIdRef.current !== nextJobId) {
+          updateJobIdRef.current = nextJobId;
+          setUpdateLogs('');
+          setUpdateLogsUnavailable(false);
+        }
         setUpdateJob(job);
-        if (job && job.status === 'running') {
-          // Fetch log tail (cap is enforced server-side).
+        if (job) {
+          // Fetch log tail for running and terminal jobs (cap is enforced server-side).
           const logRes = await apiGet<{ content: string; nextCursor: number; totalBytes: number }>(
             `/api/system/updates/jobs/${job.jobId}/logs`,
           );
-          if (!cancelled && logRes.success && logRes.data) setUpdateLogs(logRes.data.content);
+          if (!cancelled && logRes.success && logRes.data) {
+            setUpdateLogs(logRes.data.content);
+            setUpdateLogsUnavailable(false);
+          } else if (!cancelled) {
+            setUpdateLogs('');
+            setUpdateLogsUnavailable(true);
+          }
         }
+      } else {
+        setUpdateJob(null);
+        setUpdateLogs('');
+        setUpdateLogsUnavailable(false);
       }
       if (cancelled) return;
       const interval = (res.data && (res.data as PanelUpdateJob).status === 'running') ? 2_000 : 15_000;
@@ -544,6 +568,11 @@ export default function DashboardPage() {
                         <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-black/40 p-2 text-[11px] leading-tight text-slate-200">
                           {updateLogs.slice(-8000)}
                         </pre>
+                      )}
+                      {updateLogsUnavailable && (
+                        <p className="mt-2 rounded border border-yellow-900/60 bg-yellow-950/30 px-2 py-1 text-yellow-200">
+                          Update logs unavailable.
+                        </p>
                       )}
                       {updateJob.status === 'failed' && updateJob.kind === 'update' && (
                         <div className="mt-2 flex gap-2">
