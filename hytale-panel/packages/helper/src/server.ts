@@ -40,6 +40,7 @@ import {
   panelUpdateRollback,
   panelUpdateStart,
 } from './handlers/panel-update';
+import { hytaleUpdateStart, type HytaleUpdateAction } from './handlers/hytale-update';
 
 // Cap on the total /rpc request body. All legitimate helper payloads fit
 // well under 64 KiB — even a full whitelist of 1000 UUIDs is ~40 KiB
@@ -309,6 +310,13 @@ async function executeOperation(
     }
     case 'panelUpdate.rollback': {
       const result = await panelUpdateRollback(config, params);
+      return { success: result.success, data: result.success ? { jobId: result.jobId } : undefined, error: result.error };
+    }
+    case 'hytaleUpdate.start': {
+      const action = z
+        .enum(['check', 'download', 'apply', 'update-now', 'cancel'])
+        .parse(params.action) as HytaleUpdateAction;
+      const result = await hytaleUpdateStart(config, action);
       return { success: result.success, data: result.success ? { jobId: result.jobId } : undefined, error: result.error };
     }
     default:

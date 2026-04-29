@@ -27,3 +27,8 @@ hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-helper-jou
 hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-panel-updater-trigger start *
 hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-panel-updater-trigger stop *
 hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-panel-updater-trigger is-active *
+
+# Allow helper to start/stop/inspect detached Hytale server update jobs.
+hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-server-updater-trigger start *
+hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-server-updater-trigger stop *
+hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-server-updater-trigger is-active *

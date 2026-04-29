@@ -38,6 +38,12 @@ const config = {
   panelUpdateInstallEnabled: true,
   panelUpdateMaxDownloadMb: 300,
   panelUpdateBackupRetention: 5,
+  hytaleUpdateEnabled: true,
+  hytaleUpdateJobsDir: '/opt/hytale-panel-data/hytale-update-jobs',
+  hytaleUpdatePlayerWarningSeconds: 30,
+  hytaleUpdateCheckTimeoutSeconds: 60,
+  hytaleUpdateDownloadTimeoutSeconds: 900,
+  hytaleUpdateApplyTimeoutSeconds: 900,
 } satisfies HelperConfig;
 
 describe('mods.restartAndVerifyServer wording', () => {

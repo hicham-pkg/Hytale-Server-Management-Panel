@@ -98,6 +98,10 @@ services:
       PANEL_UPDATE_JOBS_DIR: /opt/hytale-panel-data/update-jobs
       PANEL_UPDATE_INSTALL_ENABLED: ${PANEL_UPDATE_INSTALL_ENABLED:-true}
       PANEL_UPDATE_MAX_LOG_BYTES: ${PANEL_UPDATE_MAX_LOG_BYTES:-2097152}
+      # Hytale server updater — API reads job status/logs only.
+      HYTALE_UPDATE_ENABLED: ${HYTALE_UPDATE_ENABLED:-true}
+      HYTALE_UPDATE_JOBS_DIR: /opt/hytale-panel-data/hytale-update-jobs
+      HYTALE_UPDATE_MAX_LOG_BYTES: ${HYTALE_UPDATE_MAX_LOG_BYTES:-2097152}
     volumes:
       # Mount a stable host directory so helper restarts do not replace the
       # bind-mounted inode the API container depends on.
@@ -109,6 +113,8 @@ services:
       # and logs.txt for the dashboard's progress view; it cannot write here
       # and cannot reach /opt/hytale-panel or /opt/hytale through this path.
       - /opt/hytale-panel-data/update-jobs:/opt/hytale-panel-data/update-jobs:ro
+      # Read-only mount for Hytale server update job state.
+      - /opt/hytale-panel-data/hytale-update-jobs:/opt/hytale-panel-data/hytale-update-jobs:ro
     ports:
       # IMPORTANT: Bind to 127.0.0.1 only — never expose directly to internet.
       - "127.0.0.1:${API_HOST_PORT:-4000}:4000"

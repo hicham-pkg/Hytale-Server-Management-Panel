@@ -1132,3 +1132,9 @@ hytale-panel/
 6. The `/opt/hytale/start.sh` script exists and launches the Hytale server
 7. Maximum 3 concurrent admin users
 8. Backup size is manageable (< 10GB per backup for world data)
+
+### Hytale Server Update Manager Boundary
+
+Hytale server updates use Hytale's own `/update ...` console commands. The browser and API never provide arbitrary console text, paths, or download URLs. The API asks the helper to create a job; the helper writes a spec under `/opt/hytale-panel-data/hytale-update-jobs` and starts a root-owned, UUID-validating systemd runner. The runner sends only fixed `/update status`, `/update check`, `/update download`, `/update apply --confirm`, `/update cancel`, and `/update patchline` commands through the existing tmux socket.
+
+The API container sees `/opt/hytale-panel-data/hytale-update-jobs` read-only for status/log polling. It still does not mount `/opt/hytale`, and all host mutation stays behind the helper/systemd boundary. Apply/update-now jobs create a pre-update backup snapshot before sending `/update apply --confirm`; automatic rollback is intentionally deferred.

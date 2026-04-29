@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# ============================================================
+# Hytale Server Updater — Trigger Wrapper
+# ============================================================
+# Root-owned shim invoked by hytale-helper via sudoers. Validates the
+# job ID before asking systemd to start/stop/inspect the detached job unit.
+# ============================================================
+set -euo pipefail
+
+usage() {
+  echo "hytale-server-updater-trigger: usage: $0 {start|stop|is-active} <jobId>" >&2
+  exit 64
+}
+
+[ "$#" -eq 2 ] || usage
+ACTION="$1"
+JOB_ID="$2"
+UUID_REGEX='^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+if ! [[ "$JOB_ID" =~ $UUID_REGEX ]]; then
+  echo "hytale-server-updater-trigger: invalid job id" >&2
+  exit 65
+fi
+
+UNIT="hytale-server-updater@${JOB_ID}.service"
+case "$ACTION" in
+  start)
+    exec /usr/bin/systemctl start --no-block "$UNIT"
+    ;;
+  stop)
+    exec /usr/bin/systemctl stop "$UNIT"
+    ;;
+  is-active)
+    exec /usr/bin/systemctl is-active --quiet "$UNIT"
+    ;;
+  *) usage ;;
+esac

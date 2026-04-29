@@ -1,0 +1,27 @@
+# ============================================================
+# Hytale Server Update Job
+# ============================================================
+# Detached host-side job for Hytale built-in update commands.
+# Started on demand through hytale-server-updater-trigger after helper
+# validation. Writes status/logs under:
+#   /opt/hytale-panel-data/hytale-update-jobs/%i/
+# ============================================================
+
+[Unit]
+Description=Hytale Server Update Job (%i)
+After=network-online.target hytale-tmux.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/hytale-panel-data/hytale-update-jobs/%i
+ExecStart=/usr/local/lib/hytale-panel/hytale-server-updater run %i
+TimeoutStartSec=infinity
+TimeoutStopSec=300
+Restart=no
+StandardOutput=append:/opt/hytale-panel-data/hytale-update-jobs/%i/logs.txt
+StandardError=append:/opt/hytale-panel-data/hytale-update-jobs/%i/logs.txt
+
+[Install]

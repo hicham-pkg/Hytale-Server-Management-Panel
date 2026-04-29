@@ -42,6 +42,18 @@ describe('helper mods handler', () => {
       whitelistPath: path.join(root, 'hytale', 'Server', 'whitelist.json'),
       bansPath: path.join(root, 'hytale', 'Server', 'bans.json'),
       worldsPath: path.join(root, 'hytale', 'Server', 'worlds'),
+      panelUpdateJobsDir: path.join(root, 'panel-data', 'update-jobs'),
+      panelUpdateBackupRoot: path.join(root, 'panel-backups'),
+      panelUpdateRepo: 'hicham-pkg/Hytale-Server-Management-Panel',
+      panelUpdateInstallEnabled: true,
+      panelUpdateMaxDownloadMb: 300,
+      panelUpdateBackupRetention: 5,
+      hytaleUpdateEnabled: true,
+      hytaleUpdateJobsDir: path.join(root, 'panel-data', 'hytale-update-jobs'),
+      hytaleUpdatePlayerWarningSeconds: 30,
+      hytaleUpdateCheckTimeoutSeconds: 60,
+      hytaleUpdateDownloadTimeoutSeconds: 900,
+      hytaleUpdateApplyTimeoutSeconds: 900,
     };
   });
 

@@ -74,6 +74,7 @@ HELPER_ENV_FILE="/opt/hytale-panel/helper/.env"
 HELPER_WRAPPER_DIR="/usr/local/lib/hytale-panel"
 HELPER_JOURNALCTL_WRAPPER="${HELPER_WRAPPER_DIR}/hytale-helper-journalctl"
 MOD_UPLOAD_STAGING_DIR="/opt/hytale-panel-data/mod-upload-staging"
+HYTALE_UPDATE_JOBS_DIR="/opt/hytale-panel-data/hytale-update-jobs"
 MODS_DIR="/opt/hytale/mods"
 DISABLED_MODS_DIR="/opt/hytale/mods-disabled"
 MOD_BACKUP_DIR="/opt/hytale/mod-backups"
@@ -228,6 +229,7 @@ migrate_helper_env_socket_path() {
   if [ -f "$ROOT_ENV_FILE" ]; then
     ensure_env_var_if_missing "$ROOT_ENV_FILE" PANEL_UPDATE_SOURCE_SUBDIR hytale-panel
     ensure_env_var_if_missing "$ROOT_ENV_FILE" PANEL_UPDATE_LIVE_DIR "$SCRIPT_DIR"
+    ensure_env_var_if_missing "$ROOT_ENV_FILE" HYTALE_UPDATE_ENABLED true
   fi
   ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SAVE_ROOT "$hytale_root/Server/universe"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" MODS_PATH "$MODS_DIR"
@@ -235,6 +237,12 @@ migrate_helper_env_socket_path() {
   ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_UPLOAD_STAGING_PATH "$MOD_UPLOAD_STAGING_DIR"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_BACKUP_PATH "$MOD_BACKUP_DIR"
   ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_BACKUP_RETENTION 10
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_ENABLED true
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_JOB_DIR "$HYTALE_UPDATE_JOBS_DIR"
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_PLAYER_WARNING_SECONDS 30
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_CHECK_TIMEOUT_SECONDS 60
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_DOWNLOAD_TIMEOUT_SECONDS 900
+  ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_APPLY_TIMEOUT_SECONDS 900
   chown root:"$PANEL_SOCKET_GROUP" "$HELPER_ENV_FILE"
   chmod 640 "$HELPER_ENV_FILE"
 }
@@ -256,6 +264,8 @@ install_helper_sudoers() {
   # Panel updater (V2) wrapper + runner script. Both root-owned.
   install -o root -g root -m 0755 "$SCRIPT_DIR/systemd/hytale-panel-updater-trigger" "$HELPER_WRAPPER_DIR/hytale-panel-updater-trigger"
   install -o root -g root -m 0755 "$SCRIPT_DIR/scripts/hytale-panel-updater.sh" "$HELPER_WRAPPER_DIR/hytale-panel-updater"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/systemd/hytale-server-updater-trigger" "$HELPER_WRAPPER_DIR/hytale-server-updater-trigger"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/scripts/hytale-server-updater.sh" "$HELPER_WRAPPER_DIR/hytale-server-updater"
 
   cp "$SCRIPT_DIR/systemd/hytale-helper.sudoers" "$HELPER_SUDOERS_FILE"
   chown root:root "$HELPER_SUDOERS_FILE"
@@ -270,8 +280,12 @@ install_panel_updater_unit() {
   install -o root -g root -m 0644 \
     "$SCRIPT_DIR/systemd/hytale-panel-updater@.service" \
     /etc/systemd/system/hytale-panel-updater@.service
+  install -o root -g root -m 0644 \
+    "$SCRIPT_DIR/systemd/hytale-server-updater@.service" \
+    /etc/systemd/system/hytale-server-updater@.service
   install -d -o root -g root -m 0755 /opt/hytale-panel-data
   install -d -o hytale-helper -g hytale-panel -m 0770 /opt/hytale-panel-data/update-jobs
+  install -d -o hytale-helper -g hytale-panel -m 0770 "$HYTALE_UPDATE_JOBS_DIR"
   install -d -o root -g root -m 0755 /opt/hytale-panel-backups
   systemctl daemon-reload
 }

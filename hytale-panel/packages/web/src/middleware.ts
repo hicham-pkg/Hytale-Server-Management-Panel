@@ -23,6 +23,7 @@ export const config = {
     '/bans/:path*',
     '/backups/:path*',
     '/mods/:path*',
+    '/hytale-updates/:path*',
     '/crashes/:path*',
     '/audit/:path*',
     '/settings/:path*',

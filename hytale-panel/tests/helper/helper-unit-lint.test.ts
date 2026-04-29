@@ -99,6 +99,8 @@ describe('hytale-helper.service unit', () => {
     expect(rwp).toContain('/opt/hytale-panel-data/mod-upload-staging');
     // Panel Updater V2 stores durable job specs/status/logs here.
     expect(rwp).toContain('/opt/hytale-panel-data/update-jobs');
+    // Hytale Server Update Manager stores durable job specs/status/logs here.
+    expect(rwp).toContain('/opt/hytale-panel-data/hytale-update-jobs');
   });
 
   it('keeps resource limits', () => {

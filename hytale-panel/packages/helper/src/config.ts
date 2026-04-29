@@ -45,6 +45,15 @@ const ConfigSchema = z.object({
   panelUpdateMaxDownloadMb: z.coerce.number().int().min(1).max(2048).default(300),
   panelUpdateBackupRetention: z.coerce.number().int().min(2).max(50).default(5),
   githubUpdateToken: z.string().min(1).optional(),
+  hytaleUpdateEnabled: z
+    .union([z.literal('true'), z.literal('false'), z.boolean()])
+    .transform((v) => v === true || v === 'true')
+    .default('true'),
+  hytaleUpdateJobsDir: AbsolutePathSchema.default('/opt/hytale-panel-data/hytale-update-jobs'),
+  hytaleUpdatePlayerWarningSeconds: z.coerce.number().int().min(0).max(300).default(30),
+  hytaleUpdateCheckTimeoutSeconds: z.coerce.number().int().min(10).max(600).default(60),
+  hytaleUpdateDownloadTimeoutSeconds: z.coerce.number().int().min(60).max(7200).default(900),
+  hytaleUpdateApplyTimeoutSeconds: z.coerce.number().int().min(60).max(7200).default(900),
 });
 
 export type HelperConfig = z.infer<typeof ConfigSchema>;
@@ -74,5 +83,11 @@ export function loadConfig(): HelperConfig {
     panelUpdateMaxDownloadMb: process.env.PANEL_UPDATE_MAX_DOWNLOAD_MB,
     panelUpdateBackupRetention: process.env.PANEL_UPDATE_BACKUP_RETENTION,
     githubUpdateToken: process.env.GITHUB_UPDATE_TOKEN || undefined,
+    hytaleUpdateEnabled: process.env.HYTALE_UPDATE_ENABLED,
+    hytaleUpdateJobsDir: process.env.HYTALE_UPDATE_JOB_DIR,
+    hytaleUpdatePlayerWarningSeconds: process.env.HYTALE_UPDATE_PLAYER_WARNING_SECONDS,
+    hytaleUpdateCheckTimeoutSeconds: process.env.HYTALE_UPDATE_CHECK_TIMEOUT_SECONDS,
+    hytaleUpdateDownloadTimeoutSeconds: process.env.HYTALE_UPDATE_DOWNLOAD_TIMEOUT_SECONDS,
+    hytaleUpdateApplyTimeoutSeconds: process.env.HYTALE_UPDATE_APPLY_TIMEOUT_SECONDS,
   });
 }

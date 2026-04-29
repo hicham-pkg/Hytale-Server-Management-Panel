@@ -57,6 +57,12 @@ describe('helper backup save-layout support', () => {
       panelUpdateInstallEnabled: true,
       panelUpdateMaxDownloadMb: 300,
       panelUpdateBackupRetention: 5,
+      hytaleUpdateEnabled: true,
+      hytaleUpdateJobsDir: path.join(root, 'panel-data', 'hytale-update-jobs'),
+      hytaleUpdatePlayerWarningSeconds: 30,
+      hytaleUpdateCheckTimeoutSeconds: 60,
+      hytaleUpdateDownloadTimeoutSeconds: 900,
+      hytaleUpdateApplyTimeoutSeconds: 900,
     };
     await mkdir(config.hytaleRoot, { recursive: true });
     await mkdir(config.backupPath, { recursive: true });

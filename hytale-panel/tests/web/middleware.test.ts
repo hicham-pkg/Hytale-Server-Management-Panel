@@ -33,4 +33,11 @@ describe('protected route middleware', () => {
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('https://panel.example/login');
   });
+
+  it('redirects unauthenticated Hytale updates page access to /login', () => {
+    const response = middleware(makeRequest('/hytale-updates'));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('https://panel.example/login');
+  });
 });

@@ -40,6 +40,10 @@ HELPER_OVERRIDE_FILE="${HELPER_OVERRIDE_DIR}/override.conf"
 HELPER_SUDOERS_FILE="/etc/sudoers.d/hytale-helper"
 HELPER_WRAPPER_DIR="/usr/local/lib/hytale-panel"
 HELPER_JOURNALCTL_WRAPPER="${HELPER_WRAPPER_DIR}/hytale-helper-journalctl"
+HYTALE_UPDATE_TRIGGER_BIN="${HELPER_WRAPPER_DIR}/hytale-server-updater-trigger"
+HYTALE_UPDATE_RUNNER_BIN="${HELPER_WRAPPER_DIR}/hytale-server-updater"
+HYTALE_UPDATE_TEMPLATED_UNIT="/etc/systemd/system/hytale-server-updater@.service"
+HYTALE_UPDATE_JOBS_DIR="/opt/hytale-panel-data/hytale-update-jobs"
 CONTAINER_API="hytale-panel-api"
 CONTAINER_WEB="hytale-panel-web"
 CONTAINER_DB="hytale-panel-db"
@@ -256,6 +260,8 @@ BANS_PATH="$(resolve_config_value BANS_PATH "$HYTALE_ROOT/Server/bans.json" "$HE
 HYTALE_SAVE_ROOT="$(resolve_config_value HYTALE_SAVE_ROOT "$HYTALE_ROOT/Server/universe" "$HELPER_ENV_FILE")"
 WORLDS_PATH="$(resolve_config_value WORLDS_PATH "$HYTALE_ROOT/Server/worlds" "$HELPER_ENV_FILE")"
 BACKUP_PATH="$(resolve_config_value BACKUP_PATH /opt/hytale-backups "$HELPER_ENV_FILE")"
+HYTALE_UPDATE_ENABLED="$(resolve_config_value HYTALE_UPDATE_ENABLED true "$HELPER_ENV_FILE" "$ROOT_ENV_FILE")"
+HYTALE_UPDATE_JOB_DIR="$(resolve_config_value HYTALE_UPDATE_JOB_DIR "$HYTALE_UPDATE_JOBS_DIR" "$HELPER_ENV_FILE")"
 PANEL_UPDATE_LIVE_DIR="$(resolve_config_value PANEL_UPDATE_LIVE_DIR "$ROOT_DIR" "$ROOT_ENV_FILE")"
 if PANEL_UPDATE_SOURCE_SUBDIR_RAW="$(read_env_value_allow_empty "$ROOT_ENV_FILE" PANEL_UPDATE_SOURCE_SUBDIR)"; then
   :
@@ -958,6 +964,12 @@ check_config() {
     fail "$MOD_UPLOAD_STAGING_DIR has mode=$staging_mode owner=$staging_owner_id, expected 2770 uid 1000:$PANEL_SOCKET_GROUP" "sudo install -d -o 1000 -g $PANEL_SOCKET_GROUP -m 2770 $MOD_UPLOAD_STAGING_DIR"
   fi
 
+  if command -v jq >/dev/null 2>&1; then
+    ok "jq is installed for detached update job runners"
+  else
+    fail "jq is missing; panel and Hytale update runners parse job JSON with jq" "sudo apt-get install -y jq"
+  fi
+
   # ─── Panel updater (V2) — directories, binaries, last job ────────────
   local update_jobs_mode update_jobs_owner
   update_jobs_mode="$(stat_mode "$PANEL_UPDATE_JOBS_DIR" 2>/dev/null || echo)"
@@ -1010,9 +1022,39 @@ check_config() {
     fail "Panel updater live root missing docker-compose.yml ($PANEL_UPDATE_LIVE_DIR)" "set PANEL_UPDATE_LIVE_DIR=$ROOT_DIR in $ROOT_ENV_FILE"
   fi
 
+  # ─── Hytale server update manager ─────────────────────────────
+  if [ "$HYTALE_UPDATE_ENABLED" = "true" ]; then
+    ok "Hytale update manager enabled"
+  else
+    warn "Hytale update manager disabled (HYTALE_UPDATE_ENABLED=$HYTALE_UPDATE_ENABLED)"
+  fi
+  local hytale_update_jobs_mode hytale_update_jobs_owner
+  hytale_update_jobs_mode="$(stat_mode "$HYTALE_UPDATE_JOB_DIR" 2>/dev/null || echo)"
+  hytale_update_jobs_owner="$(stat_owner "$HYTALE_UPDATE_JOB_DIR" 2>/dev/null || echo)"
+  if [ "$hytale_update_jobs_mode" = "770" ] && [ "$hytale_update_jobs_owner" = "hytale-helper:$PANEL_SOCKET_GROUP" ]; then
+    ok "$HYTALE_UPDATE_JOB_DIR is 770 hytale-helper:$PANEL_SOCKET_GROUP"
+  else
+    fail "$HYTALE_UPDATE_JOB_DIR has mode=$hytale_update_jobs_mode owner=$hytale_update_jobs_owner, expected 770 hytale-helper:$PANEL_SOCKET_GROUP" "sudo install -d -o hytale-helper -g $PANEL_SOCKET_GROUP -m 0770 $HYTALE_UPDATE_JOB_DIR"
+  fi
+  if [ -x "$HYTALE_UPDATE_TRIGGER_BIN" ] && [ "$(stat_owner "$HYTALE_UPDATE_TRIGGER_BIN")" = "root:root" ]; then
+    ok "Hytale updater trigger wrapper is installed"
+  else
+    fail "Hytale updater trigger wrapper missing or wrong owner at $HYTALE_UPDATE_TRIGGER_BIN" "sudo install -o root -g root -m 0755 systemd/hytale-server-updater-trigger $HYTALE_UPDATE_TRIGGER_BIN"
+  fi
+  if [ -x "$HYTALE_UPDATE_RUNNER_BIN" ] && [ "$(stat_owner "$HYTALE_UPDATE_RUNNER_BIN")" = "root:root" ]; then
+    ok "Hytale updater runner script is installed"
+  else
+    fail "Hytale updater runner script missing or wrong owner at $HYTALE_UPDATE_RUNNER_BIN" "sudo install -o root -g root -m 0755 scripts/hytale-server-updater.sh $HYTALE_UPDATE_RUNNER_BIN"
+  fi
+  if [ -f "$HYTALE_UPDATE_TEMPLATED_UNIT" ]; then
+    ok "Hytale updater templated unit installed at $HYTALE_UPDATE_TEMPLATED_UNIT"
+  else
+    fail "Hytale updater templated unit missing at $HYTALE_UPDATE_TEMPLATED_UNIT" "sudo install -o root -g root -m 0644 systemd/hytale-server-updater@.service $HYTALE_UPDATE_TEMPLATED_UNIT && sudo systemctl daemon-reload"
+  fi
+
   # Surface latest job status if it failed — non-fatal, just visible.
   local latest_job
-  latest_job="$(find "$PANEL_UPDATE_JOBS_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | awk '{print $2}')"
+  latest_job="$(find "$HYTALE_UPDATE_JOB_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | awk '{print $2}')"
   if [ -n "$latest_job" ] && [ -f "$latest_job/status.json" ]; then
     local last_status last_kind last_step_name
     last_status="$(jq -r '.status // ""' "$latest_job/status.json" 2>/dev/null)"

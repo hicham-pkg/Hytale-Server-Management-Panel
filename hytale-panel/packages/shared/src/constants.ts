@@ -82,6 +82,7 @@ export const HELPER_OPERATIONS = [
   'stats.process',
   'panelUpdate.start',
   'panelUpdate.rollback',
+  'hytaleUpdate.start',
 ] as const;
 
 export type HelperOperation = (typeof HELPER_OPERATIONS)[number];

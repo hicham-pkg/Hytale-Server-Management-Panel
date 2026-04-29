@@ -52,6 +52,15 @@ const ConfigSchema = z.object({
     .transform((v) => v === true || v === 'true')
     .default('true'),
   panelUpdateMaxLogBytes: z.coerce.number().int().min(1024).max(10_485_760).default(2_097_152),
+  hytaleUpdateEnabled: z
+    .union([z.literal('true'), z.literal('false'), z.boolean()])
+    .transform((v) => v === true || v === 'true')
+    .default('true'),
+  hytaleUpdateJobsDir: z
+    .string()
+    .startsWith('/')
+    .default('/opt/hytale-panel-data/hytale-update-jobs'),
+  hytaleUpdateMaxLogBytes: z.coerce.number().int().min(1024).max(10_485_760).default(2_097_152),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
@@ -92,6 +101,9 @@ export function getConfig(): AppConfig {
       panelUpdateJobsDir: process.env.PANEL_UPDATE_JOBS_DIR,
       panelUpdateInstallEnabled: process.env.PANEL_UPDATE_INSTALL_ENABLED,
       panelUpdateMaxLogBytes: process.env.PANEL_UPDATE_MAX_LOG_BYTES,
+      hytaleUpdateEnabled: process.env.HYTALE_UPDATE_ENABLED,
+      hytaleUpdateJobsDir: process.env.HYTALE_UPDATE_JOBS_DIR,
+      hytaleUpdateMaxLogBytes: process.env.HYTALE_UPDATE_MAX_LOG_BYTES,
     });
   }
   return _config;

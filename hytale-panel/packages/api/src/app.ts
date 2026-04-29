@@ -21,6 +21,7 @@ import { auditRoutes } from './routes/audit.routes';
 import { settingsRoutes } from './routes/settings.routes';
 import { userRoutes } from './routes/user.routes';
 import { systemUpdateRoutes } from './routes/system-update.routes';
+import { hytaleUpdateRoutes } from './routes/hytale-update.routes';
 import { consoleWsHandler } from './ws/console.ws';
 
 export async function buildApp() {
@@ -100,6 +101,7 @@ export async function buildApp() {
   await fastify.register(settingsRoutes);
   await fastify.register(userRoutes);
   await fastify.register(systemUpdateRoutes);
+  await fastify.register(hytaleUpdateRoutes);
 
   // WebSocket
   await fastify.register(consoleWsHandler);

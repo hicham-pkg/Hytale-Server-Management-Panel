@@ -5,6 +5,7 @@ export const PROTECTED_ROUTE_PREFIXES = [
   '/bans',
   '/backups',
   '/mods',
+  '/hytale-updates',
   '/crashes',
   '/audit',
   '/settings',
@@ -13,6 +14,7 @@ export const PROTECTED_ROUTE_PREFIXES = [
 export const ADMIN_ONLY_ROUTE_PREFIXES = [
   '/audit',
   '/settings',
+  '/hytale-updates',
 ] as const;
 
 export function isProtectedPath(pathname: string): boolean {

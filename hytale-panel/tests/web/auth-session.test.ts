@@ -7,12 +7,14 @@ describe('auth session route classification', () => {
     expect(isProtectedPath('/dashboard/live')).toBe(true);
     expect(isProtectedPath('/mods')).toBe(true);
     expect(isProtectedPath('/mods/install')).toBe(true);
+    expect(isProtectedPath('/hytale-updates')).toBe(true);
     expect(isProtectedPath('/login')).toBe(false);
   });
 
   it('classifies admin-only routes correctly', () => {
     expect(isAdminOnlyPath('/audit')).toBe(true);
     expect(isAdminOnlyPath('/settings/users')).toBe(true);
+    expect(isAdminOnlyPath('/hytale-updates')).toBe(true);
     expect(isAdminOnlyPath('/backups')).toBe(false);
     expect(isAdminOnlyPath('/mods')).toBe(false);
     expect(isAdminOnlyPath('/dashboard')).toBe(false);

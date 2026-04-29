@@ -770,3 +770,36 @@ docker compose exec postgres psql -U hytale_panel -c "SELECT 1;"
 # Check disk space (PostgreSQL needs space for WAL)
 df -h
 ```
+
+## Hytale Server Updates
+
+The Hytale Server Update Manager uses Hytale's built-in console update flow:
+
+```text
+/update status
+/update check
+/update download
+/update apply --confirm
+/update cancel
+/update patchline
+```
+
+Update jobs are detached host-side jobs under `/opt/hytale-panel-data/hytale-update-jobs`.
+The API can start jobs and read status/logs through a read-only bind mount, but it does not
+run `tmux`, `systemctl`, `sudo`, or write to `/opt/hytale` directly.
+
+Before applying an update, the runner performs a preflight check, creates a universe backup,
+snapshots mods and common server config files, warns players, sends `/update apply --confirm`,
+and waits for the tmux-managed Hytale runtime to return. v1 does not automatically roll back
+a failed Hytale apply; use the recorded pre-update backup for recovery.
+
+Useful config:
+
+```bash
+HYTALE_UPDATE_ENABLED=true
+HYTALE_UPDATE_PLAYER_WARNING_SECONDS=30
+HYTALE_UPDATE_CHECK_TIMEOUT_SECONDS=60
+HYTALE_UPDATE_DOWNLOAD_TIMEOUT_SECONDS=900
+HYTALE_UPDATE_APPLY_TIMEOUT_SECONDS=900
+HYTALE_UPDATE_MAX_LOG_BYTES=2097152
+```

@@ -46,10 +46,14 @@ HELPER_RUNTIME_DIR="/opt/hytale-panel/run"
 HELPER_ENV_FILE="/opt/hytale-panel/helper/.env"
 MOD_UPLOAD_STAGING_DIR="/opt/hytale-panel-data/mod-upload-staging"
 PANEL_UPDATE_JOBS_DIR="/opt/hytale-panel-data/update-jobs"
+HYTALE_UPDATE_JOBS_DIR="/opt/hytale-panel-data/hytale-update-jobs"
 PANEL_UPDATE_BACKUPS_DIR="/opt/hytale-panel-backups"
 PANEL_UPDATE_TRIGGER_BIN="/usr/local/lib/hytale-panel/hytale-panel-updater-trigger"
 PANEL_UPDATE_RUNNER_BIN="/usr/local/lib/hytale-panel/hytale-panel-updater"
 PANEL_UPDATE_TEMPLATED_UNIT="/etc/systemd/system/hytale-panel-updater@.service"
+HYTALE_UPDATE_TRIGGER_BIN="/usr/local/lib/hytale-panel/hytale-server-updater-trigger"
+HYTALE_UPDATE_RUNNER_BIN="/usr/local/lib/hytale-panel/hytale-server-updater"
+HYTALE_UPDATE_TEMPLATED_UNIT="/etc/systemd/system/hytale-server-updater@.service"
 MODS_DIR="/opt/hytale/mods"
 DISABLED_MODS_DIR="/opt/hytale/mods-disabled"
 MOD_BACKUP_DIR="/opt/hytale/mod-backups"
@@ -167,6 +171,8 @@ install_helper_sudoers() {
   # root-owned and not writable by panel/helper users.
   install -o root -g root -m 0755 "$PANEL_DIR/systemd/hytale-panel-updater-trigger" "$PANEL_UPDATE_TRIGGER_BIN"
   install -o root -g root -m 0755 "$PANEL_DIR/scripts/hytale-panel-updater.sh" "$PANEL_UPDATE_RUNNER_BIN"
+  install -o root -g root -m 0755 "$PANEL_DIR/systemd/hytale-server-updater-trigger" "$HYTALE_UPDATE_TRIGGER_BIN"
+  install -o root -g root -m 0755 "$PANEL_DIR/scripts/hytale-server-updater.sh" "$HYTALE_UPDATE_RUNNER_BIN"
 
   cp "$PANEL_DIR/systemd/hytale-helper.sudoers" "$sudoers_target"
   chown root:root "$sudoers_target"
@@ -181,11 +187,13 @@ install_panel_updater_unit() {
   # Templated systemd unit. One instance per active job. Started on demand
   # via the trigger wrapper; never enabled at boot.
   install -o root -g root -m 0644 "$PANEL_DIR/systemd/hytale-panel-updater@.service" "$PANEL_UPDATE_TEMPLATED_UNIT"
+  install -o root -g root -m 0644 "$PANEL_DIR/systemd/hytale-server-updater@.service" "$HYTALE_UPDATE_TEMPLATED_UNIT"
 
   # Data dirs the updater + helper rely on. The API container only needs
   # update-jobs, mounted read-only.
   install -d -o root -g root -m 0755 /opt/hytale-panel-data
   install -d -o hytale-helper -g hytale-panel -m 0770 "$PANEL_UPDATE_JOBS_DIR"
+  install -d -o hytale-helper -g hytale-panel -m 0770 "$HYTALE_UPDATE_JOBS_DIR"
   install -d -o root -g root -m 0755 "$PANEL_UPDATE_BACKUPS_DIR"
 
   systemctl daemon-reload
@@ -783,7 +791,7 @@ if [ "${SKIP_SYSTEM_DEPS:-0}" = "1" ]; then
 else
   log_info "[1/9] Installing system dependencies..."
   apt-get update -qq
-  apt-get install -y -qq sudo tmux curl openssl bc
+  apt-get install -y -qq sudo tmux curl openssl bc jq
 
   # Install Docker if not present
   if ! command -v docker &>/dev/null; then
@@ -963,6 +971,7 @@ set_env_var "$PANEL_DIR/.env" PANEL_SOCKET_GID "$PANEL_SOCKET_GID"
 ensure_env_var_if_missing "$PANEL_DIR/.env" MAX_MOD_UPLOAD_SIZE_MB 150
 ensure_env_var_if_missing "$PANEL_DIR/.env" PANEL_UPDATE_SOURCE_SUBDIR hytale-panel
 ensure_env_var_if_missing "$PANEL_DIR/.env" PANEL_UPDATE_LIVE_DIR "$PANEL_DIR"
+ensure_env_var_if_missing "$PANEL_DIR/.env" HYTALE_UPDATE_ENABLED true
 
 # Lock down panel .env — contains SESSION_SECRET, CSRF_SECRET, HELPER_HMAC_SECRET, DB_PASSWORD.
 # Install-time umask may leave it 0644 (world-readable); force 0600 so local users on the host
@@ -1015,6 +1024,12 @@ MOD_BACKUP_RETENTION=10
 HYTALE_SERVICE_NAME=hytale-tmux.service
 TMUX_SESSION=hytale
 TMUX_SOCKET_PATH=/opt/hytale/run/hytale.tmux.sock
+HYTALE_UPDATE_ENABLED=true
+HYTALE_UPDATE_JOB_DIR=$HYTALE_UPDATE_JOBS_DIR
+HYTALE_UPDATE_PLAYER_WARNING_SECONDS=30
+HYTALE_UPDATE_CHECK_TIMEOUT_SECONDS=60
+HYTALE_UPDATE_DOWNLOAD_TIMEOUT_SECONDS=900
+HYTALE_UPDATE_APPLY_TIMEOUT_SECONDS=900
 
 # Game server file paths
 WHITELIST_PATH=$HYTALE_SERVER_PATH/whitelist.json
@@ -1047,6 +1062,12 @@ ensure_env_var_if_missing "$HELPER_ENV_FILE" MOD_BACKUP_RETENTION 10
 ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SERVICE_NAME hytale-tmux.service
 ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SESSION hytale
 ensure_env_var_if_missing "$HELPER_ENV_FILE" TMUX_SOCKET_PATH /opt/hytale/run/hytale.tmux.sock
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_ENABLED true
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_JOB_DIR "$HYTALE_UPDATE_JOBS_DIR"
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_PLAYER_WARNING_SECONDS 30
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_CHECK_TIMEOUT_SECONDS 60
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_DOWNLOAD_TIMEOUT_SECONDS 900
+ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_UPDATE_APPLY_TIMEOUT_SECONDS 900
 ensure_env_var_if_missing "$HELPER_ENV_FILE" WHITELIST_PATH "$HYTALE_SERVER_PATH/whitelist.json"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" BANS_PATH "$HYTALE_SERVER_PATH/bans.json"
 ensure_env_var_if_missing "$HELPER_ENV_FILE" HYTALE_SAVE_ROOT "$HYTALE_SERVER_PATH/universe"

@@ -26,4 +26,14 @@ describe('doctor.sh Hytale save-layout checks', () => {
     expect(src).toContain('modern_players_path="$HYTALE_SAVE_ROOT/players"');
     expect(src).toContain('ok "modern players/ directory exists ($modern_players_path)"');
   });
+
+  it('checks Hytale update jobs from the Hytale update job directory', () => {
+    expect(src).toContain('latest_job="$(find "$HYTALE_UPDATE_JOB_DIR"');
+    expect(src).not.toContain('latest_job="$(find "$PANEL_UPDATE_JOBS_DIR"');
+  });
+
+  it('checks jq because detached updater runners parse JSON specs/status files', () => {
+    expect(src).toContain('command -v jq >/dev/null 2>&1');
+    expect(src).toContain('jq is missing; panel and Hytale update runners parse job JSON with jq');
+  });
 });
