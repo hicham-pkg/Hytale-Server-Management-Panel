@@ -28,6 +28,20 @@ interface PanelUpdateStatus {
   error?: string;
 }
 
+interface PanelUpdateJob {
+  jobId: string;
+  kind: 'update' | 'rollback';
+  step: number;
+  stepName: string;
+  totalSteps: number;
+  status: 'running' | 'success' | 'failed';
+  startedAt: string;
+  endedAt: string | null;
+  error: string | null;
+  targetTag?: string;
+  currentVersion?: string;
+}
+
 interface SystemStats {
   cpuUsagePercent: number;
   memoryUsedMb: number;
@@ -57,6 +71,12 @@ export default function DashboardPage() {
   const [updateStatus, setUpdateStatus] = useState<PanelUpdateStatus | null>(null);
   const [updateError, setUpdateError] = useState('');
   const [updateChecking, setUpdateChecking] = useState(false);
+  // Active update/rollback job — driven from /api/system/updates/jobs/latest
+  // and survives full page refresh (state is on disk, not in memory).
+  const [updateJob, setUpdateJob] = useState<PanelUpdateJob | null>(null);
+  const [updateLogs, setUpdateLogs] = useState('');
+  const [updateActionFeedback, setUpdateActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [updateActionLoading, setUpdateActionLoading] = useState<'install' | 'rollback' | null>(null);
 
   const loadUpdateStatus = async (force: boolean) => {
     setUpdateChecking(true);
@@ -99,6 +119,63 @@ export default function DashboardPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.role]);
+
+  // Poll the latest update/rollback job whenever an admin is on the page.
+  // Faster cadence while a job is running; fetches the log tail too.
+  useEffect(() => {
+    if (user?.role !== 'admin') return undefined;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const loop = async () => {
+      const res = await apiGet<PanelUpdateJob | null>('/api/system/updates/jobs/latest');
+      if (cancelled) return;
+      if (res.success) {
+        const job = res.data ?? null;
+        setUpdateJob(job);
+        if (job && job.status === 'running') {
+          // Fetch log tail (cap is enforced server-side).
+          const logRes = await apiGet<{ content: string; nextCursor: number; totalBytes: number }>(
+            `/api/system/updates/jobs/${job.jobId}/logs`,
+          );
+          if (!cancelled && logRes.success && logRes.data) setUpdateLogs(logRes.data.content);
+        }
+      }
+      if (cancelled) return;
+      const interval = (res.data && (res.data as PanelUpdateJob).status === 'running') ? 2_000 : 15_000;
+      timer = setTimeout(loop, interval);
+    };
+
+    void loop();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [user?.role]);
+
+  const startPanelUpdate = async () => {
+    setUpdateActionLoading('install');
+    setUpdateActionFeedback(null);
+    const res = await apiPost<{ jobId: string }>('/api/system/updates/start', {});
+    if (res.success && res.data) {
+      setUpdateActionFeedback({ type: 'success', message: 'Update started — watching progress…' });
+    } else {
+      setUpdateActionFeedback({ type: 'error', message: res.error ?? 'Failed to start update' });
+    }
+    setUpdateActionLoading(null);
+  };
+
+  const startRollback = async () => {
+    setUpdateActionLoading('rollback');
+    setUpdateActionFeedback(null);
+    const res = await apiPost<{ jobId: string }>('/api/system/updates/rollback', {});
+    if (res.success && res.data) {
+      setUpdateActionFeedback({ type: 'success', message: 'Rollback started — watching progress…' });
+    } else {
+      setUpdateActionFeedback({ type: 'error', message: res.error ?? 'Failed to start rollback' });
+    }
+    setUpdateActionLoading(null);
+  };
 
   const handleServerAction = async (action: 'start' | 'stop' | 'restart') => {
     setActionLoading(action);
@@ -368,11 +445,107 @@ export default function DashboardPage() {
                       )}
                     </span>
                   </div>
-                  {updateStatus.updateAvailable && (
-                    <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
-                      This panel cannot auto-install updates yet. Apply the new
-                      release manually following the upgrade docs.
-                    </p>
+                  {updateStatus.updateAvailable && !updateJob && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      <p className="font-medium">One-click update is available.</p>
+                      <p className="mt-1">
+                        This rebuilds the API and Web containers and restarts the host helper service.
+                        The Hytale game server is <strong>not</strong> restarted unless the helper redeploy requires it.
+                        A backup is taken before any files change; rollback is available if anything fails.
+                      </p>
+                      <p className="mt-1 text-[11px] italic text-amber-800">
+                        Integrity is enforced by GitHub&apos;s HTTPS chain only.
+                        SHA256 release-asset pinning is not active yet — verify the maintainer
+                        you trust controls <span className="font-mono">{updateStatus.releaseUrl?.split('/').slice(2, 5).join('/') ?? 'github.com'}</span>.
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <ConfirmDialog
+                          title="Update Panel"
+                          description={`This will install ${updateStatus.latestVersion ?? 'the latest release'} from GitHub. The panel will be briefly unavailable during the rebuild. A backup is created before applying.`}
+                          confirmLabel="Update Panel"
+                          onConfirm={startPanelUpdate}
+                        >
+                          <Button size="sm" variant="warning" disabled={updateActionLoading !== null}>
+                            {updateActionLoading === 'install' ? 'Starting…' : 'Update Panel'}
+                          </Button>
+                        </ConfirmDialog>
+                      </div>
+                      {updateActionFeedback && (
+                        <p
+                          className={
+                            updateActionFeedback.type === 'success'
+                              ? 'mt-2 text-xs text-emerald-800'
+                              : 'mt-2 text-xs text-red-800'
+                          }
+                        >
+                          {updateActionFeedback.message}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {updateJob && (
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-900">
+                          {updateJob.kind === 'rollback' ? 'Rolling back' : 'Updating panel'}
+                          {updateJob.targetTag ? ` → ${updateJob.targetTag}` : ''}
+                        </span>
+                        <span
+                          className={
+                            updateJob.status === 'running'
+                              ? 'rounded-full bg-blue-100 px-2 py-0.5 text-blue-800'
+                              : updateJob.status === 'success'
+                                ? 'rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800'
+                                : 'rounded-full bg-red-100 px-2 py-0.5 text-red-800'
+                          }
+                        >
+                          {updateJob.status === 'running'
+                            ? `step ${updateJob.step}/${updateJob.totalSteps} · ${updateJob.stepName}`
+                            : updateJob.status}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                        <div
+                          className={
+                            updateJob.status === 'failed'
+                              ? 'h-1.5 rounded-full bg-red-500 transition-all'
+                              : 'h-1.5 rounded-full bg-blue-500 transition-all'
+                          }
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.round(((updateJob.step || 0) / Math.max(updateJob.totalSteps, 1)) * 100),
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                      {updateJob.error && (
+                        <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-red-900">
+                          {updateJob.error}
+                        </p>
+                      )}
+                      {updateLogs && (
+                        <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded border border-slate-200 bg-slate-900 p-2 text-[11px] leading-tight text-slate-100">
+                          {updateLogs.slice(-8000)}
+                        </pre>
+                      )}
+                      {updateJob.status === 'failed' && updateJob.kind === 'update' && (
+                        <div className="mt-2 flex gap-2">
+                          <ConfirmDialog
+                            title="Roll back panel"
+                            description="This restores the most recent backup and recreates the containers. Any changes made since the failed update will be reverted. Continue?"
+                            confirmLabel="Roll back"
+                            variant="destructive"
+                            onConfirm={startRollback}
+                          >
+                            <Button size="sm" variant="destructive" disabled={updateActionLoading !== null}>
+                              {updateActionLoading === 'rollback' ? 'Starting…' : 'Roll back'}
+                            </Button>
+                          </ConfirmDialog>
+                        </div>
+                      )}
+                    </div>
                   )}
                   {updateStatus.releaseUrl && (
                     <div className="pt-2">

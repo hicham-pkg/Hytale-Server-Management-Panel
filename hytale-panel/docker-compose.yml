@@ -94,6 +94,10 @@ services:
       PANEL_UPDATE_REPO: ${PANEL_UPDATE_REPO:-hicham-pkg/Hytale-Server-Management-Panel}
       PANEL_UPDATE_CACHE_MINUTES: ${PANEL_UPDATE_CACHE_MINUTES:-60}
       GITHUB_UPDATE_TOKEN: ${GITHUB_UPDATE_TOKEN:-}
+      # Panel updater (V2) — API only reads job status/logs, never installs.
+      PANEL_UPDATE_JOBS_DIR: /opt/hytale-panel-data/update-jobs
+      PANEL_UPDATE_INSTALL_ENABLED: ${PANEL_UPDATE_INSTALL_ENABLED:-true}
+      PANEL_UPDATE_MAX_LOG_BYTES: ${PANEL_UPDATE_MAX_LOG_BYTES:-2097152}
     volumes:
       # Mount a stable host directory so helper restarts do not replace the
       # bind-mounted inode the API container depends on.
@@ -101,6 +105,10 @@ services:
       # Narrow write mount for raw mod uploads only. The API never gets access
       # to /opt/hytale or active mods; installs are helper-controlled.
       - /opt/hytale-panel-data/mod-upload-staging:/opt/hytale-panel-data/mod-upload-staging:rw
+      # Read-only mount for panel-updater job state. The API tails status.json
+      # and logs.txt for the dashboard's progress view; it cannot write here
+      # and cannot reach /opt/hytale-panel or /opt/hytale through this path.
+      - /opt/hytale-panel-data/update-jobs:/opt/hytale-panel-data/update-jobs:ro
     ports:
       # IMPORTANT: Bind to 127.0.0.1 only — never expose directly to internet.
       - "127.0.0.1:${API_HOST_PORT:-4000}:4000"

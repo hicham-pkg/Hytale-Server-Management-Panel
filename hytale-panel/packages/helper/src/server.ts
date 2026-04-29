@@ -36,6 +36,11 @@ import {
   rollbackModsBackup,
 } from './handlers/mods';
 import { getSystemStats, getProcessStats } from './handlers/stats';
+import {
+  panelUpdateCancelStaging,
+  panelUpdateRollback,
+  panelUpdateStart,
+} from './handlers/panel-update';
 
 // Cap on the total /rpc request body. All legitimate helper payloads fit
 // well under 64 KiB — even a full whitelist of 1000 UUIDs is ~40 KiB
@@ -298,6 +303,18 @@ async function executeOperation(
     case 'stats.process': {
       const result = await getProcessStats(config);
       return { success: result.success, data: result.stats, error: result.error };
+    }
+    case 'panelUpdate.start': {
+      const result = await panelUpdateStart(config, params);
+      return { success: result.success, data: result.success ? { jobId: result.jobId } : undefined, error: result.error };
+    }
+    case 'panelUpdate.rollback': {
+      const result = await panelUpdateRollback(config, params);
+      return { success: result.success, data: result.success ? { jobId: result.jobId } : undefined, error: result.error };
+    }
+    case 'panelUpdate.cancelStaging': {
+      const result = await panelUpdateCancelStaging(config);
+      return { success: result.success, data: { removed: result.removed ?? 0 }, error: result.error };
     }
     default:
       return { success: false, error: `Unknown operation: ${operation}` };

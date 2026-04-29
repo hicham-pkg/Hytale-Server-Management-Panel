@@ -1,7 +1,7 @@
 import { desc, eq, inArray } from 'drizzle-orm';
 import { callHelper } from './helper-client';
 import { getDb, schema } from '../db';
-import { HelperBackupListDataSchema } from '@hytale-panel/shared';
+import { HelperBackupListDataSchema, UUID_REGEX, isSafeBackupFilename } from '@hytale-panel/shared';
 import type { BackupMeta, HelperBackupFile } from '@hytale-panel/shared';
 
 const { backupMetadata } = schema;
@@ -286,36 +286,73 @@ export async function getBackupOperationStatus(operationId: string): Promise<Hel
   };
 }
 
-export async function deleteBackup(
-  backupId: string
-): Promise<{ success: boolean; error?: string }> {
-  const db = getDb();
-  const [dbBackup] = await db
-    .select()
-    .from(backupMetadata)
-    .where(eq(backupMetadata.id, backupId))
-    .limit(1);
+/**
+ * Possible failure reasons for `deleteBackup`. The route layer maps these
+ * to HTTP status codes and the frontend renders human-readable messages
+ * for each — never a generic "Backend proxy failed".
+ */
+export type DeleteBackupReason = 'invalid' | 'not_found' | 'helper_failed';
 
+export interface DeleteBackupResult {
+  success: boolean;
+  error?: string;
+  reason?: DeleteBackupReason;
+}
+
+export async function deleteBackup(backupId: string): Promise<DeleteBackupResult> {
+  // Discriminate UUID vs filename FIRST. The legacy implementation queried
+  // `backupMetadata` for every input, which crashed Postgres with
+  //   invalid input syntax for type uuid: "<filename>"
+  // when the user clicked delete on a disk-only backup. That error escaped
+  // the route's catch and produced the user-visible "Backend proxy failed".
+  const isUuid = UUID_REGEX.test(backupId);
+  const isFilename = isSafeBackupFilename(backupId);
+  if (!isUuid && !isFilename) {
+    return { success: false, reason: 'invalid', error: 'Invalid backup name' };
+  }
+
+  const db = getDb();
+  let dbRowId: string | null = null;
   let filename: string;
 
-  if (dbBackup) {
+  if (isUuid) {
+    const [dbBackup] = await db
+      .select()
+      .from(backupMetadata)
+      .where(eq(backupMetadata.id, backupId))
+      .limit(1);
+    if (!dbBackup) {
+      return { success: false, reason: 'not_found', error: 'Backup not found' };
+    }
+    dbRowId = dbBackup.id;
     filename = dbBackup.filename;
   } else {
-    // backupId might be a filename (for disk-only backups)
-    if (!/^[a-zA-Z0-9_\-\.]+\.tar\.gz$/.test(backupId)) {
-      return { success: false, error: 'Backup not found' };
-    }
+    // Disk-only backup — no DB metadata row exists; skip the DB lookup
+    // entirely and use the filename directly.
     filename = backupId;
+  }
+
+  // Defense in depth: the filename came either from the DB (already trusted)
+  // or directly from the route (already format-checked), but both can drift
+  // over time. Re-validate before crossing the helper boundary.
+  if (!isSafeBackupFilename(filename)) {
+    return { success: false, reason: 'invalid', error: 'Invalid backup name' };
   }
 
   const result = await callHelper('backup.delete', { filename });
   if (!result.success) {
-    return { success: false, error: result.error };
+    return {
+      success: false,
+      reason: 'helper_failed',
+      error: result.error || 'Delete failed',
+    };
   }
 
-  // Clean up DB metadata if it exists
-  if (dbBackup) {
-    await db.delete(backupMetadata).where(eq(backupMetadata.id, backupId));
+  // Clean up DB metadata if it exists. Ordering matters: we delete the file
+  // first, then the row. If the row delete fails the file is already gone
+  // and the next list-refresh will reconcile by dropping the stale metadata.
+  if (dbRowId !== null) {
+    await db.delete(backupMetadata).where(eq(backupMetadata.id, dbRowId));
   }
 
   return { success: true };

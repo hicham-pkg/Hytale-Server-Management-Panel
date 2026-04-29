@@ -27,6 +27,11 @@ LEGACY_HOST_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 API_HELPER_SOCKET_PATH="/run/hytale-helper/hytale-helper.sock"
 HYTALE_TMP_DIR="/opt/hytale/tmp"
 MOD_UPLOAD_STAGING_DIR="/opt/hytale-panel-data/mod-upload-staging"
+PANEL_UPDATE_JOBS_DIR="/opt/hytale-panel-data/update-jobs"
+PANEL_UPDATE_BACKUPS_DIR="/opt/hytale-panel-backups"
+PANEL_UPDATE_TRIGGER_BIN="/usr/local/lib/hytale-panel/hytale-panel-updater-trigger"
+PANEL_UPDATE_RUNNER_BIN="/usr/local/lib/hytale-panel/hytale-panel-updater"
+PANEL_UPDATE_TEMPLATED_UNIT="/etc/systemd/system/hytale-panel-updater@.service"
 MODS_DIR="/opt/hytale/mods"
 DISABLED_MODS_DIR="/opt/hytale/mods-disabled"
 MOD_BACKUP_DIR="/opt/hytale/mod-backups"
@@ -211,6 +216,11 @@ HELPER_ENV_SOCKET_OK=0
 HELPER_OVERRIDE_CLEAN=0
 HELPER_SUDOERS_OK=0
 HELPER_JOURNALCTL_WRAPPER_OK=0
+PANEL_UPDATE_JOBS_DIR_OK=0
+PANEL_UPDATE_BACKUPS_DIR_OK=0
+PANEL_UPDATE_TRIGGER_OK=0
+PANEL_UPDATE_RUNNER_OK=0
+PANEL_UPDATE_UNIT_OK=0
 LEGACY_SERVICE_RETIRED=0
 HOST_HELPER_SOCKET_OK=0
 LEGACY_HOST_HELPER_SOCKET_EXISTS=0
@@ -892,6 +902,61 @@ check_config() {
     fail "$MOD_UPLOAD_STAGING_DIR has mode=$staging_mode owner=$staging_owner_id, expected 2770 uid 1000:$PANEL_SOCKET_GROUP" "sudo install -d -o 1000 -g $PANEL_SOCKET_GROUP -m 2770 $MOD_UPLOAD_STAGING_DIR"
   fi
 
+  # ─── Panel updater (V2) — directories, binaries, last job ────────────
+  local update_jobs_mode update_jobs_owner
+  update_jobs_mode="$(stat_mode "$PANEL_UPDATE_JOBS_DIR" 2>/dev/null || echo)"
+  update_jobs_owner="$(stat_owner "$PANEL_UPDATE_JOBS_DIR" 2>/dev/null || echo)"
+  if [ "$update_jobs_mode" = "770" ] && [ "$update_jobs_owner" = "hytale-helper:$PANEL_SOCKET_GROUP" ]; then
+    PANEL_UPDATE_JOBS_DIR_OK=1
+    ok "$PANEL_UPDATE_JOBS_DIR is 770 hytale-helper:$PANEL_SOCKET_GROUP"
+  else
+    fail "$PANEL_UPDATE_JOBS_DIR has mode=$update_jobs_mode owner=$update_jobs_owner, expected 770 hytale-helper:$PANEL_SOCKET_GROUP" "sudo install -d -o hytale-helper -g $PANEL_SOCKET_GROUP -m 770 $PANEL_UPDATE_JOBS_DIR"
+  fi
+
+  local backups_mode backups_owner
+  backups_mode="$(stat_mode "$PANEL_UPDATE_BACKUPS_DIR" 2>/dev/null || echo)"
+  backups_owner="$(stat_owner "$PANEL_UPDATE_BACKUPS_DIR" 2>/dev/null || echo)"
+  if [ "$backups_mode" = "755" ] && [ "$backups_owner" = "root:root" ]; then
+    PANEL_UPDATE_BACKUPS_DIR_OK=1
+    ok "$PANEL_UPDATE_BACKUPS_DIR is 755 root:root"
+  else
+    fail "$PANEL_UPDATE_BACKUPS_DIR has mode=$backups_mode owner=$backups_owner, expected 755 root:root" "sudo install -d -o root -g root -m 0755 $PANEL_UPDATE_BACKUPS_DIR"
+  fi
+
+  if [ -x "$PANEL_UPDATE_TRIGGER_BIN" ] && [ "$(stat_owner "$PANEL_UPDATE_TRIGGER_BIN")" = "root:root" ]; then
+    PANEL_UPDATE_TRIGGER_OK=1
+    ok "Panel updater trigger wrapper is installed (root:root, 0755)"
+  else
+    fail "Panel updater trigger wrapper missing or wrong owner at $PANEL_UPDATE_TRIGGER_BIN" "sudo install -o root -g root -m 0755 systemd/hytale-panel-updater-trigger $PANEL_UPDATE_TRIGGER_BIN"
+  fi
+  if [ -x "$PANEL_UPDATE_RUNNER_BIN" ] && [ "$(stat_owner "$PANEL_UPDATE_RUNNER_BIN")" = "root:root" ]; then
+    PANEL_UPDATE_RUNNER_OK=1
+    ok "Panel updater runner script is installed (root:root, 0755)"
+  else
+    fail "Panel updater runner script missing or wrong owner at $PANEL_UPDATE_RUNNER_BIN" "sudo install -o root -g root -m 0755 scripts/hytale-panel-updater.sh $PANEL_UPDATE_RUNNER_BIN"
+  fi
+  if [ -f "$PANEL_UPDATE_TEMPLATED_UNIT" ]; then
+    PANEL_UPDATE_UNIT_OK=1
+    ok "Panel updater templated unit installed at $PANEL_UPDATE_TEMPLATED_UNIT"
+  else
+    fail "Panel updater templated unit missing at $PANEL_UPDATE_TEMPLATED_UNIT" "sudo install -o root -g root -m 0644 systemd/hytale-panel-updater@.service $PANEL_UPDATE_TEMPLATED_UNIT && sudo systemctl daemon-reload"
+  fi
+
+  # Surface latest job status if it failed — non-fatal, just visible.
+  local latest_job
+  latest_job="$(find "$PANEL_UPDATE_JOBS_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | awk '{print $2}')"
+  if [ -n "$latest_job" ] && [ -f "$latest_job/status.json" ]; then
+    local last_status last_kind last_step_name
+    last_status="$(jq -r '.status // ""' "$latest_job/status.json" 2>/dev/null)"
+    last_kind="$(jq -r '.kind // ""' "$latest_job/status.json" 2>/dev/null)"
+    last_step_name="$(jq -r '.stepName // ""' "$latest_job/status.json" 2>/dev/null)"
+    case "$last_status" in
+      success) ok "Last $last_kind job completed successfully" ;;
+      running) ok "A $last_kind job is currently running ($last_step_name)" ;;
+      failed)  fail "Last $last_kind job failed at step $last_step_name" "review logs in $latest_job/logs.txt then click Rollback in the dashboard if needed" ;;
+    esac
+  fi
+
   local dir mode owner
   for dir in "$MODS_DIR" "$DISABLED_MODS_DIR" "$MOD_BACKUP_DIR"; do
     mode="$(stat_mode "$dir")"
@@ -1040,6 +1105,11 @@ run_checks() {
   HELPER_OVERRIDE_CLEAN=0
   HELPER_SUDOERS_OK=0
   HELPER_JOURNALCTL_WRAPPER_OK=0
+  PANEL_UPDATE_JOBS_DIR_OK=0
+  PANEL_UPDATE_BACKUPS_DIR_OK=0
+  PANEL_UPDATE_TRIGGER_OK=0
+  PANEL_UPDATE_RUNNER_OK=0
+  PANEL_UPDATE_UNIT_OK=0
   LEGACY_SERVICE_RETIRED=0
   HOST_HELPER_SOCKET_OK=0
   LEGACY_HOST_HELPER_SOCKET_EXISTS=0

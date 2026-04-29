@@ -80,6 +80,9 @@ export const HELPER_OPERATIONS = [
   'mods.restartVerify',
   'stats.system',
   'stats.process',
+  'panelUpdate.start',
+  'panelUpdate.rollback',
+  'panelUpdate.cancelStaging',
 ] as const;
 
 export type HelperOperation = (typeof HELPER_OPERATIONS)[number];

@@ -26,6 +26,24 @@ const ConfigSchema = z.object({
   whitelistPath: JsonFilePathSchema.default('/opt/hytale/Server/whitelist.json'),
   bansPath: JsonFilePathSchema.default('/opt/hytale/Server/bans.json'),
   worldsPath: AbsolutePathSchema.default('/opt/hytale/Server/worlds'),
+  // Panel updater (V2). Defaults match install.sh / docker-compose.yml.
+  panelUpdateJobsDir: AbsolutePathSchema.default('/opt/hytale-panel-data/update-jobs'),
+  panelUpdateBackupRoot: AbsolutePathSchema.default('/opt/hytale-panel-backups'),
+  panelUpdateRepo: z
+    .string()
+    .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
+    .default('hicham-pkg/Hytale-Server-Management-Panel'),
+  // Master kill switch. true (default) = admin can click "Update Panel"
+  // manually. false = button hidden/disabled and panelUpdate.start RPCs are
+  // rejected. There is no scheduled / unattended auto-install path —
+  // installs are admin-click-driven only.
+  panelUpdateInstallEnabled: z
+    .union([z.literal('true'), z.literal('false'), z.boolean()])
+    .transform((v) => v === true || v === 'true')
+    .default('true'),
+  panelUpdateMaxDownloadMb: z.coerce.number().int().min(1).max(2048).default(300),
+  panelUpdateBackupRetention: z.coerce.number().int().min(2).max(50).default(5),
+  githubUpdateToken: z.string().min(1).optional(),
 });
 
 export type HelperConfig = z.infer<typeof ConfigSchema>;
@@ -47,5 +65,12 @@ export function loadConfig(): HelperConfig {
     whitelistPath: process.env.WHITELIST_PATH,
     bansPath: process.env.BANS_PATH,
     worldsPath: process.env.WORLDS_PATH,
+    panelUpdateJobsDir: process.env.PANEL_UPDATE_JOBS_DIR,
+    panelUpdateBackupRoot: process.env.PANEL_UPDATE_BACKUP_ROOT,
+    panelUpdateRepo: process.env.PANEL_UPDATE_REPO,
+    panelUpdateInstallEnabled: process.env.PANEL_UPDATE_INSTALL_ENABLED,
+    panelUpdateMaxDownloadMb: process.env.PANEL_UPDATE_MAX_DOWNLOAD_MB,
+    panelUpdateBackupRetention: process.env.PANEL_UPDATE_BACKUP_RETENTION,
+    githubUpdateToken: process.env.GITHUB_UPDATE_TOKEN || undefined,
   });
 }

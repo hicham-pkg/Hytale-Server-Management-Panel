@@ -6,7 +6,7 @@ import { pipeline } from 'stream/promises';
 import { safeExec } from '../utils/command';
 import { guardPath } from '../utils/path-guard';
 import { getServerStatus } from './server-control';
-import { BACKUP_FILENAME_REGEX, UUID_REGEX } from '@hytale-panel/shared';
+import { BACKUP_FILENAME_REGEX, UUID_REGEX, isSafeBackupFilename } from '@hytale-panel/shared';
 import type { HelperConfig } from '../config';
 import { enqueueGlobalOperation } from '../utils/operation-lock';
 
@@ -888,13 +888,24 @@ export async function deleteBackup(
   filename: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    if (!BACKUP_FILENAME_REGEX.test(filename)) {
+    // Strict re-validation at the trust boundary. Rejects leading-dot
+    // names, `..` sequences, and anything not matching the canonical
+    // backup filename shape.
+    if (!isSafeBackupFilename(filename)) {
       return { success: false, error: 'Invalid backup filename' };
     }
 
     const backupFilePath = await guardPath(path.join(config.backupPath, filename), config.backupPath);
 
-    await fs.unlink(backupFilePath);
+    try {
+      await fs.unlink(backupFilePath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        return { success: false, error: 'Backup file not found' };
+      }
+      throw err;
+    }
     return { success: true };
   } catch (err) {
     return { success: false, error: normalizeError(err, 'Backup operation failed') };

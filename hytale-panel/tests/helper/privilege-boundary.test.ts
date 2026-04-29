@@ -43,10 +43,11 @@ describe('Helper Privilege Boundary — Allowlisted Operations', () => {
     'mods.list', 'mods.installStaged', 'mods.disable', 'mods.enable',
     'mods.remove', 'mods.backup', 'mods.rollback', 'mods.restartVerify',
     'stats.system', 'stats.process',
+    'panelUpdate.start', 'panelUpdate.rollback', 'panelUpdate.cancelStaging',
   ];
 
-  it('should define exactly 28 allowed operations', () => {
-    expect(HELPER_OPERATIONS).toHaveLength(28);
+  it('should define exactly 31 allowed operations', () => {
+    expect(HELPER_OPERATIONS).toHaveLength(31);
   });
 
   for (const op of expectedOps) {

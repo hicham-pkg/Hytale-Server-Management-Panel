@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import * as updateChecker from '../services/update-checker.service';
+import * as panelUpdate from '../services/panel-update.service';
+import { getConfig } from '../config';
 import { logAudit } from '../services/audit.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
@@ -48,6 +50,147 @@ export async function systemUpdateRoutes(fastify: FastifyInstance): Promise<void
       });
 
       return reply.send({ success: true, data: status });
+    },
+  );
+
+  // ─── Panel Updater (V2) — admin-only ─────────────────────────────────
+  // start, rollback, get/list job status, get logs
+
+  fastify.post(
+    '/api/system/updates/start',
+    { preHandler: [requireAuth, requireRole('admin')] },
+    async (request, reply) => {
+      const config = getConfig();
+      if (!config.panelUpdateInstallEnabled) {
+        await logAudit({
+          userId: request.currentUser!.id,
+          action: 'panel.update_start',
+          ipAddress: request.ip,
+          success: false,
+          details: { reason: 'PANEL_UPDATE_INSTALL_ENABLED=false' },
+        });
+        return reply.status(403).send({
+          success: false,
+          error: 'Panel updates are disabled by configuration',
+        });
+      }
+
+      // We don't accept arbitrary URLs. The button uses the cached
+      // updateChecker result; we re-check here for freshness AND to derive
+      // the canonical download URL inside the trust boundary.
+      const fresh = await updateChecker.getUpdateStatus({ force: true });
+      if (!fresh.updateAvailable || !fresh.latestVersion || !fresh.latestTag) {
+        await logAudit({
+          userId: request.currentUser!.id,
+          action: 'panel.update_start',
+          ipAddress: request.ip,
+          success: false,
+          details: { reason: 'no-update-available', currentVersion: fresh.currentVersion, latestVersion: fresh.latestVersion },
+        });
+        return reply.status(409).send({
+          success: false,
+          error: 'No newer release available',
+        });
+      }
+
+      // Always download the GitHub-source tarball for the resolved tag.
+      // Release-asset URLs would be preferred but require the maintainer to
+      // attach a binary; the source archive is always available.
+      const repo = config.panelUpdateRepo;
+      const tag = encodeURIComponent(fresh.latestTag);
+      const downloadUrl = `https://api.github.com/repos/${repo}/tarball/${tag}`;
+
+      const result = await panelUpdate.startPanelUpdate({
+        targetTag: fresh.latestTag,
+        downloadUrl,
+        tarballType: 'tar.gz',
+        expectedSha256: null,
+        currentVersion: fresh.currentVersion,
+      });
+
+      await logAudit({
+        userId: request.currentUser!.id,
+        action: 'panel.update_start',
+        ipAddress: request.ip,
+        success: result.success,
+        details: result.success
+          ? { jobId: result.jobId, currentVersion: fresh.currentVersion, targetTag: fresh.latestTag }
+          : { error: result.error, currentVersion: fresh.currentVersion, targetTag: fresh.latestTag },
+      });
+
+      if (!result.success) {
+        return reply.status(409).send({ success: false, error: result.error });
+      }
+      return reply.send({ success: true, data: { jobId: result.jobId } });
+    },
+  );
+
+  fastify.post(
+    '/api/system/updates/rollback',
+    { preHandler: [requireAuth, requireRole('admin')] },
+    async (request, reply) => {
+      const config = getConfig();
+      if (!config.panelUpdateInstallEnabled) {
+        return reply.status(403).send({ success: false, error: 'Panel updates are disabled' });
+      }
+      const body = z
+        .object({ backupPath: z.string().min(1).max(500).optional() })
+        .parse(request.body ?? {});
+
+      const result = await panelUpdate.rollbackPanelUpdate({ backupPath: body.backupPath });
+
+      await logAudit({
+        userId: request.currentUser!.id,
+        action: 'panel.update_rollback',
+        ipAddress: request.ip,
+        success: result.success,
+        details: result.success
+          ? { jobId: result.jobId, backupPath: body.backupPath ?? null }
+          : { error: result.error, backupPath: body.backupPath ?? null },
+      });
+
+      if (!result.success) {
+        return reply.status(409).send({ success: false, error: result.error });
+      }
+      return reply.send({ success: true, data: { jobId: result.jobId } });
+    },
+  );
+
+  fastify.get(
+    '/api/system/updates/jobs/latest',
+    { preHandler: [requireAuth, requireRole('admin')] },
+    async (_request, reply) => {
+      const job = panelUpdate.latestJob();
+      return reply.send({ success: true, data: job });
+    },
+  );
+
+  fastify.get(
+    '/api/system/updates/jobs/:jobId',
+    { preHandler: [requireAuth, requireRole('admin')] },
+    async (request, reply) => {
+      const params = z.object({ jobId: z.string().uuid() }).parse(request.params);
+      const status = panelUpdate.readJobStatus(params.jobId);
+      if (!status) {
+        return reply.status(404).send({ success: false, error: 'Job not found' });
+      }
+      return reply.send({ success: true, data: status });
+    },
+  );
+
+  fastify.get(
+    '/api/system/updates/jobs/:jobId/logs',
+    { preHandler: [requireAuth, requireRole('admin')] },
+    async (request, reply) => {
+      const params = z.object({ jobId: z.string().uuid() }).parse(request.params);
+      const query = z
+        .object({ cursor: z.coerce.number().int().min(0).max(10_485_760).optional() })
+        .parse(request.query ?? {});
+      const tail = panelUpdate.readJobLogs(params.jobId, query.cursor ?? 0);
+      if (!tail) {
+        return reply.status(404).send({ success: false, error: 'Job not found' });
+      }
+      return reply.send({ success: true, data: tail });
     },
   );
 }

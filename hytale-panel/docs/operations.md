@@ -501,12 +501,71 @@ The panel provides two modes of operation:
 
 ---
 
-## Panel Update Checker
+## Panel Updater (V2)
 
-An admin-only **Panel Updates** card on the dashboard polls the GitHub
-Releases API and reports whether a newer panel version has been published.
-**Read-only** — it does not download, apply, or install anything. Manual
-upgrade still goes through `deploy/update-panel.sh`.
+An admin-only **Panel Updates** card on the dashboard can:
+
+1. Check whether a newer GitHub Release has been published (read-only).
+2. With one click, download the release source tarball, validate it,
+   back up the current install, apply the new version, rebuild the API
+   and Web containers, redeploy the host helper, and run `doctor.sh`.
+3. Roll back to the previous backup with one click if anything fails.
+
+The updater **does not** auto-install on a schedule, **does not** pull from
+branches, and **does not** restart the Hytale game server unless the helper
+redeploy step requires it.
+
+### First-time deployment (manual)
+
+The updater itself ships with the panel; the **first** deployment of any
+host that introduces the updater is therefore necessarily manual:
+
+```bash
+git clone https://github.com/hicham-pkg/Hytale-Server-Management-Panel /opt/hytale-panel
+cd /opt/hytale-panel/hytale-panel
+sudo ./install.sh                       # creates /opt/hytale-panel-data,
+                                        # /opt/hytale-panel-backups, the
+                                        # systemd templated unit, the trigger
+                                        # wrapper, and sudoers entries
+```
+
+After that initial install lands, every subsequent update can be driven
+from the dashboard's **Update Panel** button. `deploy/update-panel.sh`
+remains as a manual fallback.
+
+### Update download trust model
+
+V2 always downloads the **GitHub source tarball** for the resolved release
+tag — `https://api.github.com/repos/{repo}/tarball/{tag}` — never a branch,
+never `main`, never an arbitrary URL. The release tag itself comes from
+`/releases/latest` on the configured repo and is consumed only by the
+admin-gated `POST /api/system/updates/start` route, which re-fetches the
+latest release inside the trust boundary before kicking the job (so a
+stale dashboard cache cannot influence what gets installed).
+
+The download URL is allowlisted at two layers (helper handler + runner
+script) and tag-only by design. Branch URLs (`refs/heads/*`) are rejected.
+
+**Integrity caveats (V2):**
+
+- Archive integrity relies on **GitHub's HTTPS chain** plus the staged-source
+  package.json version-vs-tag match check. SHA256 release-asset pinning is
+  **not active yet**; the schema and runner support it but no maintainer-side
+  signing pipeline is wired up.
+- The runner enforces tag = `packages/api/package.json` version on the
+  staged source before applying. A release whose package.json wasn't bumped
+  is rejected at the validation step.
+- Archive entries are validated **twice**: pre-extraction (entry list walk
+  for absolute paths and `..` traversal) and post-extraction (symlinks
+  for absolute / traversal targets, hardlinks, device files, FIFOs,
+  sockets — all rejected).
+- `.env` and `helper/.env` from the archive can never replace the live
+  copies — the apply rsync `--exclude`s both.
+
+If you operate a private fork, you can move to release-asset distribution
++ SHA256 pinning by attaching `hytale-panel-vX.Y.Z.tar.gz` to your release,
+publishing the SHA256 alongside it, and pre-populating `expectedSha256` in
+the helper spec (a small follow-up PR; the runner already verifies it).
 
 ### Configuration
 

@@ -1,0 +1,59 @@
+# ============================================================
+# Hytale Panel — Templated Updater Job
+# ============================================================
+# One unit instance per update job (instance name = job ID, a UUID).
+# Runs as root because the job touches /opt/hytale-panel, /etc/systemd/system,
+# /usr/local/lib/hytale-panel, and invokes `docker compose`.
+#
+# The hytale-helper service does NOT spawn this unit as a child. Instead, the
+# helper validates the job ID, writes the job spec to disk, and calls a
+# narrow root-owned trigger script via sudo. That decoupling means a helper
+# restart (which the updater itself performs in step "deploy helper") does
+# not kill the job.
+#
+# Lifecycle:
+#   ExecStart  → /usr/local/lib/hytale-panel/hytale-panel-updater run %i
+#   The script writes status/logs to:
+#     /opt/hytale-panel-data/update-jobs/%i/{status.json,logs.txt}
+#   Both files are also visible (read-only) inside the API container so the
+#   dashboard can poll status across helper/API restarts.
+#
+# Install via install.sh / deploy-helper.sh — do not edit by hand on the VPS.
+# ============================================================
+
+[Unit]
+Description=Hytale Panel Updater Job (%i)
+After=network-online.target docker.service
+Wants=network-online.target
+# Update jobs are exclusive — the helper enforces a flock-based lock on top
+# of this systemd-level RefuseManualStart guard so only one job exists at a
+# time.
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/hytale-panel-data/update-jobs/%i
+# The trigger wrapper validates %i and starts the job.
+ExecStart=/usr/local/lib/hytale-panel/hytale-panel-updater run %i
+# Updater is a long-running orchestrator (download, build, redeploy). Don't
+# let systemd kill it for taking time.
+TimeoutStartSec=infinity
+TimeoutStopSec=300
+# If the job script itself dies, do NOT restart automatically — the user
+# will see the failure in the dashboard and decide rollback vs retry.
+Restart=no
+
+# We deliberately do NOT add SystemCallFilter / ProtectClock / similar
+# sandbox directives here. Like the helper, this unit needs to invoke
+# `docker compose`, `systemctl`, `rsync`, etc., and many of those imply
+# NoNewPrivileges=yes which would break the privileged work.
+
+# Accept extra job parameters (target tag, etc.) via the spec.json file the
+# helper writes. We do not pass them on the command line.
+StandardOutput=append:/opt/hytale-panel-data/update-jobs/%i/logs.txt
+StandardError=append:/opt/hytale-panel-data/update-jobs/%i/logs.txt
+
+[Install]
+# This unit is started on demand via `systemctl start hytale-panel-updater@<id>.service`,
+# never enabled. Leaving the [Install] block empty avoids accidental enables.

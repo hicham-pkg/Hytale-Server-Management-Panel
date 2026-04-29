@@ -45,6 +45,11 @@ HELPER_USER="hytale-helper"
 HELPER_RUNTIME_DIR="/opt/hytale-panel/run"
 HELPER_ENV_FILE="/opt/hytale-panel/helper/.env"
 MOD_UPLOAD_STAGING_DIR="/opt/hytale-panel-data/mod-upload-staging"
+PANEL_UPDATE_JOBS_DIR="/opt/hytale-panel-data/update-jobs"
+PANEL_UPDATE_BACKUPS_DIR="/opt/hytale-panel-backups"
+PANEL_UPDATE_TRIGGER_BIN="/usr/local/lib/hytale-panel/hytale-panel-updater-trigger"
+PANEL_UPDATE_RUNNER_BIN="/usr/local/lib/hytale-panel/hytale-panel-updater"
+PANEL_UPDATE_TEMPLATED_UNIT="/etc/systemd/system/hytale-panel-updater@.service"
 MODS_DIR="/opt/hytale/mods"
 DISABLED_MODS_DIR="/opt/hytale/mods-disabled"
 MOD_BACKUP_DIR="/opt/hytale/mod-backups"
@@ -157,6 +162,11 @@ install_helper_sudoers() {
 
   install -d -o root -g root -m 0755 "$HELPER_WRAPPER_DIR"
   install -o root -g root -m 0755 "$PANEL_DIR/systemd/hytale-helper-journalctl" "$HELPER_JOURNALCTL_WRAPPER"
+  # Panel updater (V2): the trigger wrapper is invoked via sudoers; the
+  # runner script is exec'd by the templated systemd unit. Both are
+  # root-owned and not writable by panel/helper users.
+  install -o root -g root -m 0755 "$PANEL_DIR/systemd/hytale-panel-updater-trigger" "$PANEL_UPDATE_TRIGGER_BIN"
+  install -o root -g root -m 0755 "$PANEL_DIR/scripts/hytale-panel-updater.sh" "$PANEL_UPDATE_RUNNER_BIN"
 
   cp "$PANEL_DIR/systemd/hytale-helper.sudoers" "$sudoers_target"
   chown root:root "$sudoers_target"
@@ -165,6 +175,20 @@ install_helper_sudoers() {
   if command -v visudo >/dev/null 2>&1; then
     visudo -cf "$sudoers_target" >/dev/null
   fi
+}
+
+install_panel_updater_unit() {
+  # Templated systemd unit. One instance per active job. Started on demand
+  # via the trigger wrapper; never enabled at boot.
+  install -o root -g root -m 0644 "$PANEL_DIR/systemd/hytale-panel-updater@.service" "$PANEL_UPDATE_TEMPLATED_UNIT"
+
+  # Data dirs the updater + helper rely on. The API container only needs
+  # update-jobs, mounted read-only.
+  install -d -o root -g root -m 0755 /opt/hytale-panel-data
+  install -d -o hytale-helper -g hytale-panel -m 0770 "$PANEL_UPDATE_JOBS_DIR"
+  install -d -o root -g root -m 0755 "$PANEL_UPDATE_BACKUPS_DIR"
+
+  systemctl daemon-reload
 }
 
 prompt_value() {
@@ -906,6 +930,9 @@ log_info "[6/9] Installing helper sudoers and retiring stale overrides..."
 
 install_helper_sudoers
 log_ok "Installed narrow /etc/sudoers.d/hytale-helper rules"
+
+install_panel_updater_unit
+log_ok "Installed panel updater systemd template + data dirs"
 
 # ─── Step 7: Generate Secrets ──────────────────────────────
 log_info "[7/9] Generating cryptographic secrets..."

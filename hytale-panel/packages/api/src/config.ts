@@ -39,6 +39,19 @@ const ConfigSchema = z.object({
     .default('hicham-pkg/Hytale-Server-Management-Panel'),
   panelUpdateCacheMinutes: z.coerce.number().int().min(1).max(1440).default(60),
   githubUpdateToken: z.string().min(1).optional(),
+  // Panel updater (V2). The API only orchestrates: it asks the helper to
+  // start a job, and reads status/logs from a read-only bind mount of the
+  // jobs dir. The API container itself never invokes sudo, systemctl, docker,
+  // or rsync. See docker-compose.yml `:ro` mount.
+  panelUpdateJobsDir: z
+    .string()
+    .startsWith('/')
+    .default('/opt/hytale-panel-data/update-jobs'),
+  panelUpdateInstallEnabled: z
+    .union([z.literal('true'), z.literal('false'), z.boolean()])
+    .transform((v) => v === true || v === 'true')
+    .default('true'),
+  panelUpdateMaxLogBytes: z.coerce.number().int().min(1024).max(10_485_760).default(2_097_152),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
@@ -76,6 +89,9 @@ export function getConfig(): AppConfig {
       panelUpdateRepo: process.env.PANEL_UPDATE_REPO,
       panelUpdateCacheMinutes: process.env.PANEL_UPDATE_CACHE_MINUTES,
       githubUpdateToken: process.env.GITHUB_UPDATE_TOKEN || undefined,
+      panelUpdateJobsDir: process.env.PANEL_UPDATE_JOBS_DIR,
+      panelUpdateInstallEnabled: process.env.PANEL_UPDATE_INSTALL_ENABLED,
+      panelUpdateMaxLogBytes: process.env.PANEL_UPDATE_MAX_LOG_BYTES,
     });
   }
   return _config;

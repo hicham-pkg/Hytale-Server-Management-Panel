@@ -185,11 +185,19 @@ export default function BackupsPage() {
     setError('');
     setMessage('');
 
-    const res = await apiDelete(`/api/backups/${id}`);
+    // encodeURIComponent is a no-op for the BackupIdentifierSchema regex
+    // (a-zA-Z0-9_-. only) but defends against any future schema widening
+    // that includes reserved URI characters.
+    const res = await apiDelete(`/api/backups/${encodeURIComponent(id)}`);
     if (res.success) {
       setMessage('Backup deleted');
       fetchBackups();
     } else {
+      // Server-side reasons get mapped to specific status codes:
+      //   400 → invalid name, 404 → not found, 502/503 → helper unavailable.
+      // The api-client surfaces the structured error string, so we just
+      // pass it through. Generic "Backend proxy failed" only fires when
+      // upstream returns non-JSON ≥500 — fixed at the service layer.
       setError(res.error || 'Failed to delete backup');
       if (res.degraded) {
         setHelperOffline(true);

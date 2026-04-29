@@ -244,6 +244,9 @@ remove_legacy_helper_socket_if_safe() {
 install_helper_sudoers() {
   install -d -o root -g root -m 0755 "$HELPER_WRAPPER_DIR"
   install -o root -g root -m 0755 "$SCRIPT_DIR/systemd/hytale-helper-journalctl" "$HELPER_JOURNALCTL_WRAPPER"
+  # Panel updater (V2) wrapper + runner script. Both root-owned.
+  install -o root -g root -m 0755 "$SCRIPT_DIR/systemd/hytale-panel-updater-trigger" "$HELPER_WRAPPER_DIR/hytale-panel-updater-trigger"
+  install -o root -g root -m 0755 "$SCRIPT_DIR/scripts/hytale-panel-updater.sh" "$HELPER_WRAPPER_DIR/hytale-panel-updater"
 
   cp "$SCRIPT_DIR/systemd/hytale-helper.sudoers" "$HELPER_SUDOERS_FILE"
   chown root:root "$HELPER_SUDOERS_FILE"
@@ -252,6 +255,16 @@ install_helper_sudoers() {
   if command -v visudo >/dev/null 2>&1; then
     visudo -cf "$HELPER_SUDOERS_FILE" >/dev/null
   fi
+}
+
+install_panel_updater_unit() {
+  install -o root -g root -m 0644 \
+    "$SCRIPT_DIR/systemd/hytale-panel-updater@.service" \
+    /etc/systemd/system/hytale-panel-updater@.service
+  install -d -o root -g root -m 0755 /opt/hytale-panel-data
+  install -d -o hytale-helper -g hytale-panel -m 0770 /opt/hytale-panel-data/update-jobs
+  install -d -o root -g root -m 0755 /opt/hytale-panel-backups
+  systemctl daemon-reload
 }
 
 echo ""
@@ -300,6 +313,7 @@ cp "$SCRIPT_DIR/systemd/hytale-helper.service" /etc/systemd/system/
 ensure_helper_user
 prepare_mod_directories
 install_helper_sudoers
+install_panel_updater_unit
 retire_legacy_helper_override
 migrate_helper_env_socket_path
 systemctl daemon-reload

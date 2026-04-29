@@ -20,3 +20,10 @@ hytale-helper ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed hytale-tmux.s
 
 # Allow helper to read journal logs for the service through the validating wrapper
 hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-helper-journalctl *
+
+# Allow helper to start/stop/inspect templated panel-updater jobs. The
+# trigger wrapper validates that the second argument is a v4 UUID before
+# calling /usr/bin/systemctl, so sudo grants only the wrapper itself.
+hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-panel-updater-trigger start *
+hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-panel-updater-trigger stop *
+hytale-helper ALL=(root) NOPASSWD: /usr/local/lib/hytale-panel/hytale-panel-updater-trigger is-active *

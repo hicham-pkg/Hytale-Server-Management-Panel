@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# ============================================================
+# Hytale Panel Updater — Trigger Wrapper
+# ============================================================
+# Root-owned shim invoked by the (non-root) hytale-helper service via sudoers.
+# Validates that the job ID is a v4-shaped UUID, then asks systemd to start
+# / stop / inspect the templated `hytale-panel-updater@<id>.service` unit.
+#
+# Why a wrapper instead of letting sudoers reference systemctl directly:
+#   sudoers wildcards on the unit-name argument would let any process running
+#   as hytale-helper start an arbitrary unit. By forcing every privileged
+#   `systemctl` call through this script we get one defensive validation
+#   layer that mirrors the journalctl wrapper pattern.
+#
+# Install at /usr/local/lib/hytale-panel/hytale-panel-updater-trigger
+# Mode 0755, owner root:root.
+# ============================================================
+set -euo pipefail
+
+usage() {
+  echo "hytale-panel-updater-trigger: usage: $0 {start|stop|is-active} <jobId>" >&2
+  exit 64
+}
+
+[ "$#" -eq 2 ] || usage
+
+ACTION="$1"
+JOB_ID="$2"
+
+# UUID v4 regex — 8-4-4-4-12 hex with the version/variant nibbles fixed.
+UUID_REGEX='^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+if ! [[ "$JOB_ID" =~ $UUID_REGEX ]]; then
+  echo "hytale-panel-updater-trigger: invalid job id" >&2
+  exit 65
+fi
+
+UNIT="hytale-panel-updater@${JOB_ID}.service"
+
+case "$ACTION" in
+  start)
+    # --no-block returns immediately so the helper RPC doesn't sit waiting.
+    exec /usr/bin/systemctl start --no-block "$UNIT"
+    ;;
+  stop)
+    exec /usr/bin/systemctl stop "$UNIT"
+    ;;
+  is-active)
+    # Run quietly; exit code carries the answer.
+    exec /usr/bin/systemctl is-active --quiet "$UNIT"
+    ;;
+  *)
+    usage
+    ;;
+esac
