@@ -97,6 +97,8 @@ describe('hytale-helper.service unit', () => {
     expect(rwp).toContain('/opt/hytale-panel/run');
     // Mods Manager staging area must be writable for upload→install flow.
     expect(rwp).toContain('/opt/hytale-panel-data/mod-upload-staging');
+    // Panel Updater V2 stores durable job specs/status/logs here.
+    expect(rwp).toContain('/opt/hytale-panel-data/update-jobs');
   });
 
   it('keeps resource limits', () => {

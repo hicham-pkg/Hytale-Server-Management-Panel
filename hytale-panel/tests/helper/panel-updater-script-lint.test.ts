@@ -126,6 +126,10 @@ describe('hytale-panel-updater (runner script)', () => {
     expect(src).not.toMatch(/https:\/\/github\.com\/\$\{repo\}\/archive\/\* \) return 0/);
   });
 
+  it('rejects direct opaque GitHub object CDN URLs in V2', () => {
+    expect(src).not.toMatch(/objects\.githubusercontent\.com\/\*/);
+  });
+
   it('requires a known set of project files in the staged source', () => {
     for (const required of [
       'package.json',

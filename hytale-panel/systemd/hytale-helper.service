@@ -93,7 +93,7 @@ ProtectSystem=strict
 ProtectHome=true
 ProtectControlGroups=true
 PrivateTmp=true
-ReadWritePaths=/opt/hytale /opt/hytale-backups /opt/hytale-panel/run /opt/hytale-panel-data/mod-upload-staging
+ReadWritePaths=/opt/hytale /opt/hytale-backups /opt/hytale-panel/run /opt/hytale-panel-data/mod-upload-staging /opt/hytale-panel-data/update-jobs
 
 # Resource limits
 LimitNOFILE=1024

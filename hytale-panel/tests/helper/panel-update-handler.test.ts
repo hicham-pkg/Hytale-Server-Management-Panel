@@ -122,6 +122,7 @@ describe('isAllowedDownloadUrl', () => {
     ['https://codeload.github.com/hicham-pkg/Hytale-Server-Management-Panel/legacy.tar.gz/main', 'branch tarball via codeload legacy'],
     ['https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/git/refs/heads/main', 'branch ref via api'],
     ['https://api.github.com/repos/hicham-pkg/Hytale-Server-Management-Panel/contents/install.sh', 'arbitrary api endpoint'],
+    ['https://objects.githubusercontent.com/github-production-release-asset-2e65be/anything', 'opaque GitHub object CDN URL'],
   ])('rejects %s (%s)', async (url) => {
     const { isAllowedDownloadUrl } = await loadHandler();
     expect(isAllowedDownloadUrl(url, 'hicham-pkg/Hytale-Server-Management-Panel')).toBe(false);

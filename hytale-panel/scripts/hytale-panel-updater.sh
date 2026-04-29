@@ -189,7 +189,6 @@ validate_download_url() {
     https://github.com/${repo}/releases/download/*       ) return 0 ;;
     https://codeload.github.com/${repo}/tar.gz/refs/tags/*) return 0 ;;
     https://codeload.github.com/${repo}/zip/refs/tags/*  ) return 0 ;;
-    https://objects.githubusercontent.com/*              ) return 0 ;;
     *) return 1 ;;
   esac
 }

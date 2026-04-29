@@ -72,8 +72,6 @@ export interface PanelUpdateCancelResult {
  *   https://github.com/{repo}/archive/refs/tags/<tag>.{tar.gz,zip}
  *   https://github.com/{repo}/releases/download/<tag>/...   (release assets)
  *   https://codeload.github.com/{repo}/{tar.gz,zip}/refs/tags/<tag>
- *   https://objects.githubusercontent.com/...               (release-asset CDN
- *                                                            redirect target)
  *
  * Rejected examples:
  *   /archive/refs/heads/main.tar.gz             — branch tarball
@@ -112,11 +110,6 @@ export function isAllowedDownloadUrl(url: string, repo: string): boolean {
         path.startsWith(`/${repo}/tar.gz/refs/tags/`) ||
         path.startsWith(`/${repo}/zip/refs/tags/`)
       );
-    case 'objects.githubusercontent.com':
-      // Release-asset CDN redirect target. We can't validate the path layout
-      // (it's an opaque blob URL), but we trust the redirect chain because
-      // the initial URL we sent was an already-validated api.github.com one.
-      return true;
     default:
       return false;
   }
