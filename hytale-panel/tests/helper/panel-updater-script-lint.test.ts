@@ -16,6 +16,29 @@ const WRAPPER_PATH = path.resolve(__dirname, '../../systemd/hytale-panel-updater
 const RUNNER_PATH = path.resolve(__dirname, '../../scripts/hytale-panel-updater.sh');
 const UNIT_PATH = path.resolve(__dirname, '../../systemd/hytale-panel-updater@.service');
 const SUDOERS_PATH = path.resolve(__dirname, '../../systemd/hytale-helper.sudoers');
+const UPDATE_REPO = 'hicham-pkg/Hytale-Server-Management-Panel';
+
+function scriptAllowsDownloadUrl(url: string, repo = UPDATE_REPO): boolean {
+  try {
+    execFileSync(
+      'bash',
+      ['-lc', 'source "$RUNNER_PATH"; validate_download_url "$URL" "$REPO"'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HYTALE_PANEL_UPDATER_LIB_ONLY: '1',
+          RUNNER_PATH,
+          URL: url,
+          REPO: repo,
+        },
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe('hytale-panel-updater-trigger (root-owned wrapper)', () => {
   const src = fs.readFileSync(WRAPPER_PATH, 'utf8');
@@ -191,6 +214,68 @@ describe('hytale-panel-updater (runner script)', () => {
     // We pass the URL as the last positional in the args ARRAY, not concatenated.
     expect(src).toMatch(/curl_args\+=\("\$url"\)/);
     expect(src).not.toMatch(/curl .*\$\{url\}.*\$\{token\}/);
+  });
+});
+
+describe('helper and runner URL allowlists stay equivalent', () => {
+  const cases = [
+    {
+      name: 'github tag tarball',
+      url: `https://github.com/${UPDATE_REPO}/archive/refs/tags/v1.2.3.tar.gz`,
+      allowed: true,
+    },
+    {
+      name: 'github tag zip',
+      url: `https://github.com/${UPDATE_REPO}/archive/refs/tags/v1.2.3.zip`,
+      allowed: true,
+    },
+    {
+      name: 'codeload tag tarball',
+      url: `https://codeload.github.com/${UPDATE_REPO}/tar.gz/refs/tags/v1.2.3`,
+      allowed: true,
+    },
+    {
+      name: 'codeload tag zip',
+      url: `https://codeload.github.com/${UPDATE_REPO}/zip/refs/tags/v1.2.3`,
+      allowed: true,
+    },
+    {
+      name: 'github branch tarball',
+      url: `https://github.com/${UPDATE_REPO}/archive/refs/heads/main.tar.gz`,
+      allowed: false,
+    },
+    {
+      name: 'github short branch archive',
+      url: `https://github.com/${UPDATE_REPO}/archive/main.tar.gz`,
+      allowed: false,
+    },
+    {
+      name: 'codeload branch tarball',
+      url: `https://codeload.github.com/${UPDATE_REPO}/tar.gz/refs/heads/main`,
+      allowed: false,
+    },
+    {
+      name: 'GitHub API archive endpoint',
+      url: `https://api.github.com/repos/${UPDATE_REPO}/tarball/v1.2.3`,
+      allowed: false,
+    },
+    {
+      name: 'opaque GitHub object CDN URL',
+      url: 'https://objects.githubusercontent.com/github-production-release-asset-2e65be/example',
+      allowed: false,
+    },
+    {
+      name: 'arbitrary URL',
+      url: 'https://downloads.example.invalid/panel.tar.gz',
+      allowed: false,
+    },
+  ];
+
+  it.each(cases)('$name', async ({ url, allowed }) => {
+    const { isAllowedDownloadUrl } = await import('../../packages/helper/src/handlers/panel-update');
+
+    expect(isAllowedDownloadUrl(url, UPDATE_REPO)).toBe(allowed);
+    expect(scriptAllowsDownloadUrl(url)).toBe(allowed);
   });
 });
 

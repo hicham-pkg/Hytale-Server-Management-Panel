@@ -37,7 +37,6 @@ import {
 } from './handlers/mods';
 import { getSystemStats, getProcessStats } from './handlers/stats';
 import {
-  panelUpdateCancelStaging,
   panelUpdateRollback,
   panelUpdateStart,
 } from './handlers/panel-update';
@@ -311,10 +310,6 @@ async function executeOperation(
     case 'panelUpdate.rollback': {
       const result = await panelUpdateRollback(config, params);
       return { success: result.success, data: result.success ? { jobId: result.jobId } : undefined, error: result.error };
-    }
-    case 'panelUpdate.cancelStaging': {
-      const result = await panelUpdateCancelStaging(config);
-      return { success: result.success, data: { removed: result.removed ?? 0 }, error: result.error };
     }
     default:
       return { success: false, error: `Unknown operation: ${operation}` };

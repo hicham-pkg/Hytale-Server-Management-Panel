@@ -152,6 +152,13 @@ export async function systemUpdateRoutes(fastify: FastifyInstance): Promise<void
     async (request, reply) => {
       const config = getConfig();
       if (!config.panelUpdateInstallEnabled) {
+        await logAudit({
+          userId: request.currentUser!.id,
+          action: 'panel.update_rollback',
+          ipAddress: request.ip,
+          success: false,
+          details: { reason: 'PANEL_UPDATE_INSTALL_ENABLED=false' },
+        });
         return reply.status(403).send({ success: false, error: 'Panel updates are disabled' });
       }
       const body = z

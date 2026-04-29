@@ -56,12 +56,6 @@ export interface PanelUpdateRollbackResult {
   error?: string;
 }
 
-export interface PanelUpdateCancelResult {
-  success: boolean;
-  removed?: number;
-  error?: string;
-}
-
 /**
  * Verify a downloadUrl points at a TAGGED RELEASE on the configured GitHub
  * repo. Tag-only by design — branch downloads (refs/heads/*) are explicitly
@@ -390,43 +384,4 @@ export async function panelUpdateRollback(
   } finally {
     releaseLock();
   }
-}
-
-/**
- * Garbage-collect stale staging dirs from terminated jobs. Useful as a
- * maintenance hook or after a hard crash. Never deletes a job whose status
- * is "running".
- */
-export async function panelUpdateCancelStaging(
-  config: HelperConfig,
-): Promise<PanelUpdateCancelResult> {
-  if (!fs.existsSync(config.panelUpdateJobsDir)) {
-    return { success: true, removed: 0 };
-  }
-  let removed = 0;
-  for (const ent of fs.readdirSync(config.panelUpdateJobsDir, { withFileTypes: true })) {
-    if (!ent.isDirectory() || !UUID_V4_REGEX.test(ent.name)) continue;
-    const dir = path.join(config.panelUpdateJobsDir, ent.name);
-    const statusFile = path.join(dir, 'status.json');
-    let status = 'unknown';
-    try {
-      const parsed = JSON.parse(fs.readFileSync(statusFile, 'utf8')) as { status?: string };
-      status = parsed.status ?? 'unknown';
-    } catch {
-      /* missing/malformed — treat as terminal */
-    }
-    if (status === 'running') continue;
-    // Older than 24h, prune. We keep recent terminal jobs so the dashboard
-    // can still surface their final logs.
-    try {
-      const mtime = fs.statSync(dir).mtimeMs;
-      if (Date.now() - mtime > 24 * 60 * 60 * 1000) {
-        fs.rmSync(dir, { recursive: true, force: true });
-        removed += 1;
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-  return { success: true, removed };
 }

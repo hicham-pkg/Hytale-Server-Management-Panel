@@ -207,6 +207,23 @@ describe('POST /api/system/updates/rollback', () => {
     await app.close();
   });
 
+  it('audits when rollback is disabled by configuration', async () => {
+    process.env.PANEL_UPDATE_INSTALL_ENABLED = 'false';
+    mockUserState.user = ADMIN;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/api/system/updates/rollback', payload: {} });
+    expect(res.statusCode).toBe(403);
+    expect(panelUpdateMock.rollbackPanelUpdate).not.toHaveBeenCalled();
+    expect(auditMock.logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'panel.update_rollback',
+        success: false,
+        details: expect.objectContaining({ reason: 'PANEL_UPDATE_INSTALL_ENABLED=false' }),
+      }),
+    );
+    await app.close();
+  });
+
   it('audits success and forwards backupPath', async () => {
     mockUserState.user = ADMIN;
     panelUpdateMock.rollbackPanelUpdate.mockResolvedValue({
