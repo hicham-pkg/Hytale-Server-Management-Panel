@@ -1,6 +1,6 @@
 {
   "name": "@hytale-panel/helper",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "main": "dist/index.js",
   "scripts": {
