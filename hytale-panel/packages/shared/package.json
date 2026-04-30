@@ -1,6 +1,6 @@
 {
   "name": "@hytale-panel/shared",
-  "version": "1.3.0-rc.1",
+  "version": "1.3.0-rc.2",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
