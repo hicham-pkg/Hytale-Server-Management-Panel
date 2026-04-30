@@ -7,55 +7,17 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { apiGet, apiPost } from '@/lib/api-client';
 import { AlertTriangle, Download, RefreshCw, ShieldCheck, XCircle } from 'lucide-react';
-
-type HytaleUpdateAction = 'check' | 'download' | 'apply' | 'update-now' | 'cancel';
-type JobStatus = 'running' | 'success' | 'failed';
-type UpdateStatus =
-  | 'unknown'
-  | 'checking'
-  | 'up_to_date'
-  | 'update_available'
-  | 'downloading'
-  | 'staged'
-  | 'applying'
-  | 'succeeded'
-  | 'failed';
-
-interface HytaleUpdateJob {
-  jobId: string;
-  kind: 'hytale-update';
-  action: HytaleUpdateAction;
-  step: number;
-  stepName: string;
-  totalSteps: number;
-  status: JobStatus;
-  updateStatus: UpdateStatus;
-  startedAt: string;
-  endedAt: string | null;
-  error: string | null;
-}
-
-interface HytaleUpdateOverview {
-  enabled: boolean;
-  status: UpdateStatus;
-  latestJob: HytaleUpdateJob | null;
-  lastChecked: string | null;
-  currentVersion: string | null;
-  latestVersion: string | null;
-  patchline: string | null;
-}
-
-const statusLabels: Record<UpdateStatus, string> = {
-  unknown: 'Unknown',
-  checking: 'Checking',
-  up_to_date: 'Up to date',
-  update_available: 'Update available',
-  downloading: 'Downloading',
-  staged: 'Staged',
-  applying: 'Applying',
-  succeeded: 'Succeeded',
-  failed: 'Failed',
-};
+import {
+  DEFAULT_ADVANCED_EXPANDED,
+  DEFAULT_LOGS_EXPANDED,
+  APPLY_CONFIRM_DESCRIPTION,
+  getHytaleUpdateUiModel,
+  type HytaleUpdateAction,
+  type HytaleUpdateJob,
+  type HytaleUpdateOverview,
+  type PrimaryUpdateAction,
+  type UpdateStatus,
+} from '@/lib/hytale-update-ui';
 
 function statusClass(status: UpdateStatus) {
   if (status === 'failed') return 'bg-red-100 text-red-800';
@@ -70,6 +32,8 @@ export default function HytaleUpdatesPage() {
   const [job, setJob] = useState<HytaleUpdateJob | null>(null);
   const [logs, setLogs] = useState('');
   const [logsUnavailable, setLogsUnavailable] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(DEFAULT_ADVANCED_EXPANDED);
+  const [logsExpanded, setLogsExpanded] = useState(DEFAULT_LOGS_EXPANDED);
   const [loadingAction, setLoadingAction] = useState<HytaleUpdateAction | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const jobIdRef = useRef<string | null>(null);
@@ -98,6 +62,7 @@ export default function HytaleUpdatesPage() {
           jobIdRef.current = nextId;
           setLogs('');
           setLogsUnavailable(false);
+          setLogsExpanded(latest?.status === 'failed');
         }
         setJob(latest);
         if (latest) {
@@ -125,6 +90,12 @@ export default function HytaleUpdatesPage() {
     };
   }, []);
 
+  const model = getHytaleUpdateUiModel(overview, job);
+
+  useEffect(() => {
+    if (model.autoExpandLogs) setLogsExpanded(true);
+  }, [model.autoExpandLogs]);
+
   const startAction = async (action: HytaleUpdateAction) => {
     setLoadingAction(action);
     setFeedback(null);
@@ -138,8 +109,38 @@ export default function HytaleUpdatesPage() {
     setLoadingAction(null);
   };
 
-  const currentStatus = job?.updateStatus ?? overview?.status ?? 'unknown';
+  const currentStatus = model.currentStatus;
   const running = job?.status === 'running';
+
+  const renderActionButton = (action: PrimaryUpdateAction, variant: 'default' | 'outline' | 'warning' | 'destructive' = 'default') => {
+    const actionName = action.action;
+    const disabled = running || loadingAction !== null || actionName === null;
+    const button = (
+      <Button
+        size="sm"
+        variant={variant}
+        disabled={disabled}
+        onClick={action.confirmTitle || !actionName ? undefined : () => void startAction(actionName)}
+      >
+        {actionName === 'update-now' && <ShieldCheck className="mr-1 h-3 w-3" />}
+        {actionName === 'check' && <RefreshCw className="mr-1 h-3 w-3" />}
+        {action.label}
+      </Button>
+    );
+
+    if (!action.confirmTitle || !actionName) return button;
+
+    return (
+      <ConfirmDialog
+        title={action.confirmTitle}
+        description={action.confirmDescription ?? ''}
+        confirmLabel={action.confirmLabel ?? 'Confirm'}
+        onConfirm={() => startAction(actionName)}
+      >
+        {button}
+      </ConfirmDialog>
+    );
+  };
 
   return (
     <AppShell>
@@ -155,7 +156,7 @@ export default function HytaleUpdatesPage() {
               <RefreshCw className="h-4 w-4" /> Update Status
             </CardTitle>
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClass(currentStatus)}`}>
-              {statusLabels[currentStatus]}
+              {model.statusLabel}
             </span>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
@@ -165,7 +166,7 @@ export default function HytaleUpdatesPage() {
               </div>
             )}
 
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-4">
               <div className="rounded-md border bg-slate-950/40 p-3">
                 <p className="text-xs text-muted-foreground">Current Hytale version</p>
                 <p className="font-mono text-xs">{overview?.currentVersion ?? 'unknown'}</p>
@@ -182,66 +183,79 @@ export default function HytaleUpdatesPage() {
                 <p className="text-xs text-muted-foreground">Last checked/job</p>
                 <p className="font-mono text-xs">{overview?.lastChecked ? new Date(overview.lastChecked).toLocaleString() : 'Never'}</p>
               </div>
-              <div className="rounded-md border bg-slate-950/40 p-3">
-                <p className="text-xs text-muted-foreground">Latest action</p>
-                <p className="font-mono text-xs">{job?.action ?? 'none'}</p>
-              </div>
-              <div className="rounded-md border bg-slate-950/40 p-3">
-                <p className="text-xs text-muted-foreground">Job state</p>
-                <p className="font-mono text-xs">{job ? `${job.status} (${job.step}/${job.totalSteps} ${job.stepName})` : 'none'}</p>
-              </div>
             </div>
 
-            <div className="rounded-md border border-yellow-800 bg-yellow-900/20 px-3 py-2 text-xs text-yellow-200">
-              <div className="flex gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div className="space-y-1">
-                  <p>This restarts the Hytale server. Connected players may be disconnected.</p>
-                  <p>A backup is created before applying.</p>
-                  <p>Mods may need updates after a Hytale update.</p>
-                  <p>No automatic rollback is performed in v1; use the pre-update backup for recovery if needed.</p>
+            {model.showUpdateWarning && (
+              <div className="rounded-md border border-yellow-800 bg-yellow-900/20 px-3 py-2 text-xs text-yellow-200">
+                <div className="flex gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div className="space-y-1">
+                    <p>A Hytale update is ready. Review the confirmation before applying it.</p>
+                    <p>The server will restart and mods may need updates after the update.</p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" disabled={running || loadingAction !== null} onClick={() => void startAction('check')}>
-                Check for updates
-              </Button>
-              <Button size="sm" variant="outline" disabled={running || loadingAction !== null} onClick={() => void startAction('download')}>
-                <Download className="mr-1 h-3 w-3" /> Download update
-              </Button>
-              <ConfirmDialog
-                title="Apply staged Hytale update"
-                description="This creates a backup, warns players, applies the staged update, and waits for the server to restart. Connected players may be disconnected. Mods may need updates after this. Automatic rollback is not performed in v1."
-                confirmLabel="Apply update"
-                onConfirm={() => startAction('apply')}
+              {renderActionButton(model.primaryAction, model.primaryAction.action === 'check' ? 'outline' : 'warning')}
+            </div>
+
+            <div className="rounded-md border border-slate-800 bg-slate-950/30">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-slate-200"
+                onClick={() => setAdvancedOpen((open) => !open)}
               >
-                <Button size="sm" variant="warning" disabled={running || loadingAction !== null}>
-                  Apply staged update
-                </Button>
-              </ConfirmDialog>
-              <ConfirmDialog
-                title="Update Hytale now"
-                description="This checks, downloads, backs up, applies, and restarts the Hytale server. Connected players may be disconnected. Mods may need updates after this. Automatic rollback is not performed in v1."
-                confirmLabel="Update now"
-                onConfirm={() => startAction('update-now')}
-              >
-                <Button size="sm" variant="warning" disabled={running || loadingAction !== null}>
-                  <ShieldCheck className="mr-1 h-3 w-3" /> Update now
-                </Button>
-              </ConfirmDialog>
-              <ConfirmDialog
-                title="Cancel staged Hytale update"
-                description="This sends Hytale's built-in /update cancel command. It does not restore files or roll back a completed apply."
-                confirmLabel="Cancel staged update"
-                variant="destructive"
-                onConfirm={() => startAction('cancel')}
-              >
-                <Button size="sm" variant="destructive" disabled={running || loadingAction !== null}>
-                  <XCircle className="mr-1 h-3 w-3" /> Cancel staged update
-                </Button>
-              </ConfirmDialog>
+                <span>Advanced actions</span>
+                <span className="text-xs text-muted-foreground">{advancedOpen ? 'Hide' : 'Show'}</span>
+              </button>
+              {advancedOpen && (
+                <div className="space-y-3 border-t border-slate-800 px-3 py-3 text-xs text-slate-300">
+                  <p className="text-muted-foreground">Use these only when you want to split Hytale&apos;s built-in update flow into separate steps.</p>
+                  <div className="flex flex-wrap gap-2">
+                    {model.showAdvancedDownload && (
+                      <Button size="sm" variant="outline" disabled={running || loadingAction !== null} onClick={() => void startAction('download')}>
+                        <Download className="mr-1 h-3 w-3" /> Download only
+                      </Button>
+                    )}
+                    {model.showAdvancedApply && (
+                      <ConfirmDialog
+                        title="Apply staged Hytale update"
+                        description={APPLY_CONFIRM_DESCRIPTION}
+                        confirmLabel="Back up and apply"
+                        onConfirm={() => startAction('apply')}
+                      >
+                        <Button size="sm" variant="warning" disabled={running || loadingAction !== null}>
+                          Apply only
+                        </Button>
+                      </ConfirmDialog>
+                    )}
+                    {model.showAdvancedCancel && (
+                      <ConfirmDialog
+                        title="Cancel staged Hytale update"
+                        description="This sends Hytale's built-in /update cancel command. It does not restore files or roll back a completed apply."
+                        confirmLabel="Cancel staged update"
+                        variant="destructive"
+                        onConfirm={() => startAction('cancel')}
+                      >
+                        <Button size="sm" variant="destructive" disabled={running || loadingAction !== null}>
+                          <XCircle className="mr-1 h-3 w-3" /> Cancel staged update
+                        </Button>
+                      </ConfirmDialog>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-800 bg-black/20 p-3">
+                    <p className="mb-2 font-medium text-slate-100">Raw update status</p>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <p>Update status: <span className="font-mono">{currentStatus}</span></p>
+                      <p>Latest action: <span className="font-mono">{job?.action ?? 'none'}</span></p>
+                      <p>Job state: <span className="font-mono">{job ? `${job.status} (${job.step}/${job.totalSteps} ${job.stepName})` : 'none'}</span></p>
+                      <p>Job ID: <span className="font-mono">{job?.jobId ?? 'none'}</span></p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {feedback && (
@@ -252,18 +266,23 @@ export default function HytaleUpdatesPage() {
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base font-medium">Latest Job Logs</CardTitle>
+            <Button size="sm" variant="outline" onClick={() => setLogsExpanded((expanded) => !expanded)}>
+              {logsExpanded ? 'Hide technical logs' : 'Show technical logs'}
+            </Button>
           </CardHeader>
-          <CardContent>
-            {logsUnavailable ? (
+          {logsExpanded && (
+            <CardContent>
+              {logsUnavailable ? (
               <p className="text-sm text-yellow-300">Logs unavailable for the latest Hytale update job.</p>
             ) : logs ? (
               <pre className="max-h-96 overflow-auto rounded-md border bg-slate-950 p-3 text-xs text-slate-200">{logs}</pre>
             ) : (
               <p className="text-sm text-muted-foreground">No Hytale update logs yet.</p>
             )}
-          </CardContent>
+            </CardContent>
+          )}
         </Card>
       </div>
     </AppShell>
